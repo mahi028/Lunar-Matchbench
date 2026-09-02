@@ -23,11 +23,15 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from pathlib import Path
 
 import requests
 
-from lunar_matchbench.config import CACHE_DIR, HTTP_TIMEOUT, RANGE_CHUNK_MAX
+from lunar_matchbench.config import (
+    CACHE_DIR, HTTP_TIMEOUT, RANGE_CHUNK_MAX,
+    RANGE_MAX_RETRIES, RANGE_RETRY_WAIT,
+)
 
 _CONTENT_RANGE_RE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", re.IGNORECASE)
 
@@ -73,13 +77,37 @@ class RangeFile:
             return int(r.headers["Content-Length"])
         # Some hosts refuse HEAD. A one-byte range still reports the total in
         # its Content-Range, so fall back to that rather than giving up.
-        r = self._session.get(self.url, headers={**self._headers, "Range": "bytes=0-0"},
-                              timeout=HTTP_TIMEOUT)
-        self.stats["requests"] += 1
+        r = self._get_with_retry({**self._headers, "Range": "bytes=0-0"})
         m = _CONTENT_RANGE_RE.search(r.headers.get("Content-Range", ""))
         if not m or m.group(3) == "*":
             raise RangeNotHonoured(self.url, 0, 1, "server did not report a total size")
         return int(m.group(3))
+
+    # ── transport ───────────────────────────────────────────────────────────
+    def _get_with_retry(self, headers: dict) -> requests.Response:
+        """GET with bounded retries on transient transport failures.
+
+        Long-lived archive hosts drop connections; observed in practice as
+        RemoteDisconnected mid-run. A registration should not die because one
+        request out of a handful blipped, especially over venue wifi. Only
+        transport errors are retried -- an honest HTTP response, including a
+        mis-served range, is returned to the caller for validation.
+        """
+        last: Exception | None = None
+        for attempt in range(RANGE_MAX_RETRIES):
+            try:
+                r = self._session.get(self.url, headers=headers, timeout=HTTP_TIMEOUT)
+                self.stats["requests"] += 1
+                return r
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                last = exc
+                self.stats["requests"] += 1
+                if attempt < RANGE_MAX_RETRIES - 1:
+                    time.sleep(RANGE_RETRY_WAIT * (attempt + 1))
+        raise RangeNotHonoured(
+            self.url, 0, 0,
+            f"transport failed after {RANGE_MAX_RETRIES} attempts: {last}",
+        )
 
     # ── cache ───────────────────────────────────────────────────────────────
     def _cache_path(self, offset: int, length: int) -> Path:
@@ -106,12 +134,7 @@ class RangeFile:
             return data
 
         end = offset + length - 1
-        r = self._session.get(
-            self.url,
-            headers={**self._headers, "Range": f"bytes={offset}-{end}"},
-            timeout=HTTP_TIMEOUT,
-        )
-        self.stats["requests"] += 1
+        r = self._get_with_retry({**self._headers, "Range": f"bytes={offset}-{end}"})
 
         if r.status_code != 206:
             raise RangeNotHonoured(

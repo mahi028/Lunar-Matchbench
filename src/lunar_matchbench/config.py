@@ -92,6 +92,9 @@ HTTP_TIMEOUT    = 60                 # seconds
 # multi-ranges -- a 3 KB multi-range request came back 200 with all 529 MB.
 # Never batch ranges; issue one contiguous interval per request.
 RANGE_CHUNK_MAX     = 64 * 1024 * 1024   # refuse absurd single reads
+# Archive hosts drop long-lived connections; a run should survive one blip.
+RANGE_MAX_RETRIES   = 3                  # attempts per ranged read
+RANGE_RETRY_WAIT    = 1.5                # seconds, multiplied by attempt
 LROC_SEARCH_MARGIN  = 0.5                # extra window height, as a fraction of raw_win
 MAX_LROC_WINDOWS    = 3                  # hard cap on windows fetched per product
 # Probing an in-memory buffer costs a SIFT pass, not a read, so the search is
