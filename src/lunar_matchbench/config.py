@@ -6,7 +6,22 @@ from pathlib import Path
 import os
 
 # ── Project roots ─────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# PROJECT_ROOT must NOT be derived from this file's own location (the old
+# `parent.parent.parent`) -- that only resolves correctly when running from
+# the source tree (uv run / editable install). Once the package is installed
+# normally (as the Dockerfile's `pip install .` does), config.py lives under
+# .../site-packages/lunar_matchbench/, and that computation silently pointed
+# at somewhere inside the Python installation itself (e.g.
+# /usr/local/lib/python3.14) instead of the app's working directory -- every
+# downloaded file was written there instead of any deployment's actual (and
+# possibly volume-mounted) data directory, and the next lookup never found
+# it there either, forcing a re-download on every request.
+#
+# Default to the current working directory: the project root for `uv run` /
+# pytest (both invoked from there), and /app inside the Docker image per its
+# WORKDIR. LUNAR_MATCHBENCH_DATA_ROOT overrides this for deployments that
+# need data on a specific (e.g. separately mounted) path.
+PROJECT_ROOT = Path(os.environ.get("LUNAR_MATCHBENCH_DATA_ROOT", Path.cwd()))
 DATA_ROOT    = PROJECT_ROOT / "data_store"            # downloaded science data
 OUTPUT_ROOT  = PROJECT_ROOT / "outputs"               # registration results
 STATIC_ROOT  = Path(__file__).parent / "api" / "static"
