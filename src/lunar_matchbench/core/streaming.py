@@ -136,3 +136,107 @@ class RangeFile:
         cached.write_bytes(data)
         self.stats["fetched_bytes"] += len(data)
         return data
+
+
+# ── PDS3 raster readers ──────────────────────────────────────────────────────
+
+PDS3_LABEL_PROBE = 65536     # the attached label always fits comfortably in 64 KB
+PDS_NULL_FLOOR = -32752      # values at or below this are PDS nulls, not terrain
+
+
+def parse_pds3_label(raw: bytes) -> dict:
+    """Parse the key geometry fields out of an attached PDS3 label.
+
+    Takes bytes rather than a path so a local file and a 64 KB ranged read of a
+    remote product go through exactly the same parser -- the two must agree, or
+    a streamed patch would silently come from a different part of the strip
+    than a cached one.
+    """
+    hdr = raw.decode("latin-1", errors="replace")
+
+    def _get(key: str, default):
+        m = re.search(rf"\b{key}\s*=\s*\"?([^\r\n\"]+)\"?", hdr)
+        return m.group(1).strip() if m else default
+
+    label_records = int(_get("LABEL_RECORDS", 2))
+    record_bytes = int(_get("RECORD_BYTES", 5064 * 2))
+    return {
+        "total_lines":   int(_get("LINES", 48128)),
+        "total_samples": int(_get("LINE_SAMPLES", 5064)),
+        "label_records": label_records,
+        "record_bytes":  record_bytes,
+        "data_offset":   label_records * record_bytes,
+        "product_id":    _get("PRODUCT_ID", ""),
+        "start_time":    _get("START_TIME", ""),
+        "dataset_id":    _get("DATA_SET_ID", ""),
+    }
+
+
+def _decode_lines(raw: bytes, samples: int):
+    """int16 LSB bytes -> float32 (lines, samples) with PDS nulls as nan."""
+    import numpy as np
+
+    n_lines = len(raw) // (samples * 2)
+    if n_lines == 0:
+        return np.empty((0, samples), dtype=np.float32)
+    arr = np.frombuffer(raw[: n_lines * samples * 2], dtype="<i2")
+    arr = arr.reshape(n_lines, samples).astype(np.float32)
+    arr[arr <= PDS_NULL_FLOOR] = np.nan
+    return arr
+
+
+class LocalLrocReader:
+    """Read line windows from a PDS3 product already on disk."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        with open(self.path, "rb") as f:
+            self.label = parse_pds3_label(f.read(PDS3_LABEL_PROBE))
+        self.total_lines = self.label["total_lines"]
+        self.total_samples = self.label["total_samples"]
+        self.stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
+
+    def read_lines(self, start_line: int, n_lines: int):
+        start_line = max(0, start_line)
+        n_lines = max(0, min(n_lines, self.total_lines - start_line))
+        if n_lines == 0:
+            return _decode_lines(b"", self.total_samples)
+        row = self.total_samples * 2
+        with open(self.path, "rb") as f:
+            f.seek(self.label["data_offset"] + start_line * row)
+            raw = f.read(n_lines * row)
+        return _decode_lines(raw, self.total_samples)
+
+
+class LrocStream:
+    """Read line windows from a PDS3 product over HTTP byte ranges.
+
+    Deliberately exposes the same surface as LocalLrocReader -- total_lines,
+    total_samples, read_lines, stats -- so the pipeline cannot tell which one
+    it was handed and a cached product behaves identically to a streamed one.
+    """
+
+    def __init__(self, rf: RangeFile):
+        self.rf = rf
+        probe = min(PDS3_LABEL_PROBE, rf.size)
+        self.label = parse_pds3_label(rf.read_range(0, probe))
+        self.total_lines = self.label["total_lines"]
+        self.total_samples = self.label["total_samples"]
+
+    @classmethod
+    def open(cls, url: str, session=None, cache_dir=None) -> "LrocStream":
+        return cls(RangeFile(url, session=session, cache_dir=cache_dir))
+
+    @property
+    def stats(self) -> dict:
+        return self.rf.stats
+
+    def read_lines(self, start_line: int, n_lines: int):
+        start_line = max(0, start_line)
+        n_lines = max(0, min(n_lines, self.total_lines - start_line))
+        if n_lines == 0:
+            return _decode_lines(b"", self.total_samples)
+        row = self.total_samples * 2
+        raw = self.rf.read_range(self.label["data_offset"] + start_line * row,
+                                 n_lines * row)
+        return _decode_lines(raw, self.total_samples)

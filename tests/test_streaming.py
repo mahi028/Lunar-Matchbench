@@ -135,3 +135,143 @@ def test_resume_appends_when_server_honours_the_offset(range_server, tmp_path):
     assert _download_file(session, url, dest, None) is True
     assert dest.read_bytes() == state.payload
     assert state.request_log[-1] == "bytes=4096-", "should have asked to resume"
+
+
+# ── PDS3 raster readers ──────────────────────────────────────────────────────
+
+import numpy as np
+
+from lunar_matchbench.core.streaming import (
+    LocalLrocReader, LrocStream, parse_pds3_label,
+)
+
+# LABEL_RECORDS * RECORD_BYTES must equal the padded label length, or the
+# raster offset lands inside the header.
+_LABEL_BYTES = 512
+PDS3_LABEL = (
+    b"PDS_VERSION_ID = PDS3\r\n"
+    b"RECORD_TYPE = FIXED_LENGTH\r\n"
+    b"RECORD_BYTES = 512\r\n"
+    b"LABEL_RECORDS = 1\r\n"
+    b"PRODUCT_ID = \"nactest0001\"\r\n"
+    b"START_TIME = 2009-08-15T00:00:00\r\n"
+    b"DATA_SET_ID = \"LRO-L-LROC-3-CDR-V1.0\"\r\n"
+    b"OBJECT = IMAGE\r\n"
+    b"  LINES = 8\r\n"
+    b"  LINE_SAMPLES = 10\r\n"
+    b"  SAMPLE_BITS = 16\r\n"
+    b"  SAMPLE_TYPE = LSB_INTEGER\r\n"
+    b"END_OBJECT = IMAGE\r\n"
+    b"END\r\n"
+).ljust(_LABEL_BYTES, b" ")
+
+
+def _synthetic_pds3(tmp_path):
+    """A tiny but structurally real PDS3 product: 1 label record + 8x10 int16."""
+    pixels = np.arange(80, dtype="<i2").reshape(8, 10)
+    pixels[0, 0] = -32768                       # a PDS null
+    path = tmp_path / "tiny.IMG"
+    path.write_bytes(PDS3_LABEL + pixels.tobytes())
+    return path, pixels
+
+
+def test_parse_pds3_label_reads_geometry():
+    label = parse_pds3_label(PDS3_LABEL)
+    assert label["total_lines"] == 8
+    assert label["total_samples"] == 10
+    assert label["label_records"] == 1
+    assert label["record_bytes"] == 512
+    assert label["data_offset"] == 512
+    assert label["product_id"] == "nactest0001"
+
+
+def test_local_reader_reads_a_line_window(tmp_path):
+    path, pixels = _synthetic_pds3(tmp_path)
+    reader = LocalLrocReader(path)
+    assert reader.total_lines == 8
+    assert reader.total_samples == 10
+    window = reader.read_lines(2, 3)
+    assert window.shape == (3, 10)
+    np.testing.assert_array_equal(window, pixels[2:5].astype(np.float32))
+
+
+def test_local_reader_maps_nulls_to_nan(tmp_path):
+    path, _ = _synthetic_pds3(tmp_path)
+    window = LocalLrocReader(path).read_lines(0, 1)
+    assert np.isnan(window[0, 0])
+    assert not np.isnan(window[0, 1])
+
+
+def test_local_reader_clamps_past_eof(tmp_path):
+    path, _ = _synthetic_pds3(tmp_path)
+    window = LocalLrocReader(path).read_lines(6, 10)
+    assert window.shape == (2, 10)
+
+
+def _serve_blob(blob):
+    """Serve a fixed byte blob over HTTP with honest single-range support."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *a):
+            pass
+
+        def do_HEAD(self):
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(blob)))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+
+        def do_GET(self):
+            s, _, e = self.headers["Range"].removeprefix("bytes=").partition("-")
+            s = int(s)
+            e = min(int(e), len(blob) - 1) if e else len(blob) - 1
+            body = blob[s:e + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {s}-{s + len(body) - 1}/{len(blob)}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/blob"
+
+
+def test_stream_and_local_readers_agree(tmp_path):
+    """The streaming reader must produce identical results to the local one."""
+    path, _ = _synthetic_pds3(tmp_path)
+    srv, url = _serve_blob(path.read_bytes())
+    try:
+        stream = LrocStream.open(url, cache_dir=tmp_path / "c")
+        assert stream.total_lines == 8
+        assert stream.total_samples == 10
+        np.testing.assert_array_equal(
+            stream.read_lines(2, 3), LocalLrocReader(path).read_lines(2, 3)
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_stream_reader_requests_only_the_lines_asked_for(tmp_path):
+    """A line window must cost exactly its own bytes, not the whole raster.
+
+    The synthetic product here is far too small for a megabyte-scale saving to
+    mean anything, so this asserts the property that scales instead: the read
+    after the label probe fetches precisely n_lines * samples * 2 bytes. The
+    end-to-end size win is measured against the live product in test_live.py.
+    """
+    path, _ = _synthetic_pds3(tmp_path)
+    srv, url = _serve_blob(path.read_bytes())
+    try:
+        stream = LrocStream.open(url, cache_dir=tmp_path / "c")
+        after_label = stream.stats["fetched_bytes"]
+        stream.read_lines(2, 3)
+        assert stream.stats["fetched_bytes"] - after_label == 3 * 10 * 2
+    finally:
+        srv.shutdown()
+        srv.server_close()
