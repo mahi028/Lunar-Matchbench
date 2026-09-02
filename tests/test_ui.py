@@ -112,3 +112,42 @@ def test_locator_flags_a_fully_searched_strip(page, live_server):
     page.goto(f"{live_server}/?job=uitest02", wait_until="networkidle")
     page.wait_for_selector("#locator svg", timeout=15000)
     assert page.locator("#locator").get_attribute("data-coverage") == "full"
+
+
+def test_comparator_exposes_both_frames_and_a_draggable_split(page, live_server):
+    _seed("uitest03", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest03", wait_until="networkidle")
+    page.wait_for_selector(".cmp", timeout=15000)
+
+    assert page.locator(".cmp-img[data-layer='reference']").count() == 1
+    assert page.locator(".cmp-img[data-layer='moving']").count() == 1
+    assert page.locator(".cmp-handle").count() == 1
+
+    box = page.locator(".cmp").bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + box["height"] / 2)
+    page.mouse.up()
+    split = page.evaluate(
+        "getComputedStyle(document.querySelector('.cmp')).getPropertyValue('--split')")
+    assert float(split.strip()) < 0.45, f"split did not follow the drag: {split!r}"
+
+
+def test_comparator_split_is_keyboard_operable(page, live_server):
+    _seed("uitest03b", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest03b", wait_until="networkidle")
+    page.wait_for_selector(".cmp-handle", timeout=15000)
+    page.focus(".cmp-handle")
+    for _ in range(5):
+        page.keyboard.press("ArrowLeft")
+    split = float(page.evaluate(
+        "getComputedStyle(document.querySelector('.cmp')).getPropertyValue('--split')").strip())
+    assert split < 0.5, "arrow keys must move the split"
+
+
+def test_comparator_switches_to_fade(page, live_server):
+    _seed("uitest04", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest04", wait_until="networkidle")
+    page.wait_for_selector(".cmp", timeout=15000)
+    page.click("[data-mode='fade']")
+    assert page.locator(".cmp").get_attribute("data-mode") == "fade"
