@@ -33,13 +33,24 @@ from lunar_matchbench.utils.geo import DEG_TO_KM_LAT
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
-    """Download url → dest with resume support. Returns dest path."""
+    """
+    Download url → dest with resume support. Returns dest path.
+
+    Downloads to a `.part` sibling and only renames it to `dest` once the
+    transfer completes -- so `dest` existing is proof the download actually
+    finished. Writing straight to `dest` (the old behaviour) meant a process
+    killed mid-download left a truncated file under the *final* filename,
+    which every later call then trusted as a complete, valid cache hit --
+    the truncated bytes only surfaced much later as an obscure reshape
+    crash deep in patch extraction, far from the actual cause.
+    """
     if dest.exists() and dest.stat().st_size > 0:
         return dest
+    partial = dest.with_name(dest.name + ".part")
     headers = {}
     existing = 0
-    if dest.exists():
-        existing = dest.stat().st_size
+    if partial.exists():
+        existing = partial.stat().st_size
         headers["Range"] = f"bytes={existing}-"
 
     with requests.get(url, headers=headers, stream=True, timeout=HTTP_TIMEOUT) as r:
@@ -48,7 +59,7 @@ def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
         mode = "ab" if existing else "wb"
         downloaded = existing
         t0 = time.time()
-        with open(dest, mode) as f:
+        with open(partial, mode) as f:
             for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK):
                 if chunk:
                     f.write(chunk)
@@ -62,6 +73,7 @@ def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
                             print(f"\r  Downloaded {downloaded/1e6:.1f} MB  @ {rate:.1f} MB/s", end="", flush=True)
     if verbose:
         print()
+    partial.rename(dest)
     return dest
 
 
@@ -347,6 +359,14 @@ def extract_lroc_patch(
         with open(img_path, "rb") as f:
             f.seek(skip)
             raw = f.read(nbytes)
+        if len(raw) < nbytes:
+            # The file on disk is shorter than its own PDS3 header's LINES
+            # field promises (a truncated/corrupted download, most likely --
+            # see _http_download's .part-then-rename fix). Treat this window
+            # as unavailable rather than letting reshape() raise and crash
+            # the whole job; the caller already skips a None window / falls
+            # through to the next candidate product.
+            return None
         arr = np.frombuffer(raw, dtype="<i2").reshape(nl, total_samples).astype(np.float32)
         if raw_win_samples < total_samples:
             cs = (total_samples - raw_win_samples) // 2
