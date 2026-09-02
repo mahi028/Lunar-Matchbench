@@ -447,6 +447,8 @@ def extract_lroc_patch(
     best_center = approx_center
     best_n = 0
     windows_fetched = 0
+    covered_lo: int | None = None
+    covered_hi: int | None = None
     chosen: np.ndarray | None = None
 
     sift = bf = kp_ref = des_ref = None
@@ -478,6 +480,9 @@ def extract_lroc_patch(
         windows_fetched += 1
         if buf.shape[0] < raw_win // 2:
             continue
+        covered_lo = buf_start if covered_lo is None else min(covered_lo, buf_start)
+        covered_hi = (buf_start + buf.shape[0] if covered_hi is None
+                      else max(covered_hi, buf_start + buf.shape[0]))
 
         if sift is None:
             chosen = _crop(buf[:raw_win])
@@ -527,6 +532,11 @@ def extract_lroc_patch(
                                 max(0, total_lines - raw_win)))
         chosen = _crop(reader.read_lines(buf_start, raw_win))
 
+    lines_searched = (covered_hi - covered_lo) if covered_lo is not None else 0
+    # Whether an unconfident result is meaningful evidence depends entirely on
+    # how much of the strip was actually examined.
+    whole_strip = total_lines > 0 and lines_searched >= 0.95 * total_lines
+
     localization_info = {
         "best_n": best_n,
         "min_confident_matches": MIN_CONFIDENT_MATCHES,
@@ -535,6 +545,11 @@ def extract_lroc_patch(
         "used_center_line": best_center,
         "windows_fetched": windows_fetched,
         "window_lines": buffer_lines,
+        "total_lines": total_lines,
+        "lines_searched": lines_searched,
+        "strip_fraction_searched": (round(lines_searched / total_lines, 3)
+                                    if total_lines else 0.0),
+        "whole_strip_searched": bool(whole_strip),
     }
     if chosen is None:
         return None, localization_info

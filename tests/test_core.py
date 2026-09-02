@@ -241,3 +241,34 @@ def test_warm_presets_match_the_ui_presets():
                for a, b in re.findall(r'data-lat="([-\d.]+)"\s+data-lon="([-\d.]+)"', html)}
     assert in_html, "no presets found in index.html -- did the markup change?"
     assert in_html == set(WARM_PRESETS)
+
+
+def test_localization_reports_strip_coverage():
+    """An unconfident result means different things at 20% vs 100% coverage.
+
+    At 10.2N/289.5E a 24-probe sweep of all 15,360 lines found no peak, so the
+    honest report there is "genuine mismatch", not "may be mislocalized".
+    """
+    import numpy as np
+
+    from lunar_matchbench.core.downloader import extract_lroc_patch
+
+    class ShortStrip:
+        """Short enough that the window cap covers the whole thing."""
+        total_lines = 4000
+        total_samples = 512
+        stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
+
+        def read_lines(self, start, n):
+            start = max(0, start)
+            n = max(0, min(n, self.total_lines - start))
+            rng = np.random.default_rng(3)
+            return rng.normal(500, 1, (n, self.total_samples)).astype(np.float32)
+
+    candidate = {"lat_min": 10.0, "lat_max": 11.0, "lon_min": 288.0, "lon_max": 290.0}
+    _, info = extract_lroc_patch(ShortStrip(), candidate, 10.5, 289.0,
+                                 ref_patch=None, scale_factor=1.0)
+    assert info["total_lines"] == 4000
+    assert 0.0 <= info["strip_fraction_searched"] <= 1.0
+    assert isinstance(info["whole_strip_searched"], bool)
+    assert info["lines_searched"] <= info["total_lines"]

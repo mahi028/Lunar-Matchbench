@@ -298,13 +298,24 @@ def run_pipeline(
     if result["status"] != "SUCCESS":
         reason = result.get("reason", "Registration failed.")
         if loc_info and not loc_info["confident"]:
-            reason += (
-                f" (Localization was NOT confident -- best coarse-scan peak was only "
-                f"{loc_info['best_n']} matches, below the {loc_info['min_confident_matches']} "
-                f"threshold, so this patch is the raw geometry estimate, not a visually "
-                f"verified location. This failure may reflect a mislocalized patch rather "
-                f"than a genuine content/illumination mismatch.)"
-            )
+            pct = int(round(loc_info.get("strip_fraction_searched", 0) * 100))
+            if loc_info.get("whole_strip_searched"):
+                reason += (
+                    f" (The ENTIRE LROC strip was searched -- {loc_info.get('lines_searched', 0)} "
+                    f"of {loc_info.get('total_lines', 0)} lines, {pct}% -- and no location "
+                    f"correlated above {loc_info['min_confident_matches']} matches "
+                    f"(best was {loc_info['best_n']}). This is a genuine content or "
+                    f"illumination mismatch, not a mislocalized patch.)"
+                )
+            else:
+                reason += (
+                    f" (Localization was NOT confident -- best coarse-scan peak was only "
+                    f"{loc_info['best_n']} matches, below the {loc_info['min_confident_matches']} "
+                    f"threshold, and only {pct}% of the strip was searched, so this patch is "
+                    f"the raw geometry estimate rather than a visually verified location. "
+                    f"This failure may reflect a mislocalized patch rather than a genuine "
+                    f"content/illumination mismatch.)"
+                )
         step_images["final"] = str(_step_failed(ch2_patch, lroc_patch, result, reason, label))
         return {
             "status":      "FAILED",

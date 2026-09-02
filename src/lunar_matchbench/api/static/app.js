@@ -252,21 +252,34 @@ document.addEventListener("DOMContentLoaded", () => {
           <span class="diag-value">${ok ? "CONFIDENT" : "NOT VERIFIED"}</span>
           <span class="diag-detail">
             ${loc.best_n} correlated matches vs ${loc.min_confident_matches} threshold
-            &middot; searched ${loc.windows_fetched} window${loc.windows_fetched === 1 ? "" : "s"}
-            of ${loc.window_lines} lines
+            &middot; searched ${Math.round((loc.strip_fraction_searched || 0) * 100)}% of the
+            ${loc.total_lines}-line strip
+            (${loc.windows_fetched} window${loc.windows_fetched === 1 ? "" : "s"})
           </span>
         </div>`);
 
-      if (!ok) {
-        const drift = Math.abs(
-          (loc.used_center_line || 0) - (loc.approx_center_line || 0));
+      if (!ok && loc.whole_strip_searched) {
+        // The strongest honest statement available: everything was looked at.
         rows.push(`
           <p class="diag-note">
-            This patch is the <strong>raw pushbroom geometry estimate</strong>, not a
-            visually verified location &mdash; so this run does not show that the two
-            images fail to correspond. It may simply not have been looking at the
-            matching part of the LROC strip. Searching further along the strip, or
-            trying a neighbouring coordinate, may still succeed.
+            The <strong>entire LROC strip was searched</strong>
+            (${loc.lines_searched} of ${loc.total_lines} lines) and no location
+            correlated above the threshold &mdash; the best anywhere was
+            ${loc.best_n}. This is a <strong>genuine content or illumination
+            mismatch</strong>, not a mislocalized patch. This coordinate really
+            does not register against this reference image.
+          </p>`);
+      } else if (!ok) {
+        const drift = Math.abs(
+          (loc.used_center_line || 0) - (loc.approx_center_line || 0));
+        const pct = Math.round((loc.strip_fraction_searched || 0) * 100);
+        rows.push(`
+          <p class="diag-note">
+            Only <strong>${pct}% of the LROC strip was searched</strong>, so this patch
+            is the raw pushbroom geometry estimate rather than a visually verified
+            location. This run therefore does <em>not</em> show that the two images fail
+            to correspond &mdash; it may simply not have been looking at the matching
+            part of the strip.
             ${drift ? `Geometry and search peak differ by ${drift} lines.` : ""}
           </p>`);
       } else {
