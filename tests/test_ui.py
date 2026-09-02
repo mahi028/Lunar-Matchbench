@@ -151,3 +151,27 @@ def test_comparator_switches_to_fade(page, live_server):
     page.wait_for_selector(".cmp", timeout=15000)
     page.click("[data-mode='fade']")
     assert page.locator(".cmp").get_attribute("data-mode") == "fade"
+
+
+def test_tiepoint_overlay_reports_real_counts(page, live_server):
+    _seed("uitest05", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest05", wait_until="networkidle")
+    page.wait_for_selector("canvas.tp-canvas", timeout=15000)
+
+    legend = page.inner_text(".tp-legend")
+    assert "2" in legend and "3" in legend, f"expected 2 kept of 3 points: {legend!r}"
+
+    page.click("[data-filter='inliers']")
+    assert page.locator(".tp").get_attribute("data-filter") == "inliers"
+
+
+def test_tiepoint_hover_reads_out_a_residual(page, live_server):
+    _seed("uitest06", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest06", wait_until="networkidle")
+    page.wait_for_selector("canvas.tp-canvas", timeout=15000)
+    box = page.locator("canvas.tp-canvas").bounding_box()
+    # Point 0 sits at (100,120) in a 1024 patch; hover its drawn position.
+    page.mouse.move(box["x"] + box["width"] * (100 / 1024),
+                    box["y"] + box["height"] * (120 / 1024))
+    page.wait_for_timeout(300)
+    assert "px" in page.inner_text(".tp-readout")

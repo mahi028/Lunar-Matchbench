@@ -17,8 +17,10 @@ export function mountComparator(container, { jobId, mode = "swipe" }) {
            src="${patchUrl(jobId, "warped")}" />
       <div class="cmp-handle" role="slider" tabindex="0" aria-label="Comparison split"
            aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
-      <span class="cmp-tag cmp-tag--l">LROC NAC</span>
-      <span class="cmp-tag cmp-tag--r">CH2 TMC-2</span>
+      <!-- The clip reveals the moving layer from the left edge, so the left of
+           the split is Chandrayaan-2 and the right is the LROC reference. -->
+      <span class="cmp-tag cmp-tag--l">CH2 TMC-2</span>
+      <span class="cmp-tag cmp-tag--r">LROC NAC</span>
     </div>`;
 
   const cmp = container.querySelector(".cmp");
