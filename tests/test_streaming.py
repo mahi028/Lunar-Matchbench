@@ -378,3 +378,64 @@ def test_zip_stream_rejects_shifted_offsets(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ── Streamed CH2 geometry + patch extraction ─────────────────────────────────
+
+def _ch2_zip_blob():
+    """A zip shaped like a real CH2 TMC product: geometry CSV + DEFLATE raster."""
+    samples, lines = 4000, 300
+    rng = np.random.default_rng(21)
+    raster = rng.integers(0, 4000, lines * samples, dtype="<u2").tobytes()
+
+    rows = ["Longitude,Latitude,Pixel,Scan"]
+    for scan in range(0, lines, 10):
+        lat = 15.0 + (scan - 150) * 0.0001
+        rows.append(f"289.20,{lat:.6f},2000,{scan}")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("geometry/calibrated/g_grd.csv", "\n".join(rows))
+        z.writestr("data/calibrated/scene_d_img.img", raster)
+    return buf.getvalue()
+
+
+def test_streamed_ch2_geometry_match_and_patch(tmp_path):
+    """Resolve a coordinate and pull its patch without transferring the archive."""
+    from lunar_matchbench.core.downloader import (
+        extract_ch2_patch, find_ch2_geometry_match_streamed,
+    )
+
+    blob = _ch2_zip_blob()
+    srv, url = _serve_blob(blob)
+    try:
+        z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+        match = find_ch2_geometry_match_streamed(z, 15.0, 289.20, "tmc")
+        assert match is not None, "the planted grid should cover this coordinate"
+        assert match["zstream"] is z
+        assert 0 <= match["scan"] < 300
+
+        after_geometry = z.stats["fetched_bytes"]
+        assert after_geometry < len(blob), "geometry lookup pulled the whole archive"
+
+        patch = extract_ch2_patch(match, "tmc", size=256)
+        assert patch is not None
+        assert patch.shape == (256, 256)
+        assert patch.dtype == np.uint8
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_streamed_ch2_rejects_far_coordinate(tmp_path):
+    """A coordinate outside the imaged swath must return None, not a bogus edge pixel."""
+    from lunar_matchbench.core.downloader import find_ch2_geometry_match_streamed
+
+    blob = _ch2_zip_blob()
+    srv, url = _serve_blob(blob)
+    try:
+        z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+        assert find_ch2_geometry_match_streamed(z, -40.0, 100.0, "tmc") is None
+    finally:
+        srv.shutdown()
+        srv.server_close()

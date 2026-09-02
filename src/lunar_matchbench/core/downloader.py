@@ -149,13 +149,61 @@ def _read_ch2_pixel_resolution(zip_path: Path) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def find_ch2_geometry_match_streamed(zstream, lat: float, lon: float,
+                                     instrument: str) -> dict | None:
+    """Nearest-grid-point search against a remote ZIP's geometry CSV.
+
+    The CSV is ~0.8 MB compressed, so resolving a coordinate to a scan line
+    costs two small ranged reads rather than the whole archive.
+    """
+    meta = INSTRUMENT_META[instrument]
+    csv_names = [n for n in zstream.namelist() if n.endswith(".csv")]
+    if not csv_names:
+        return None
+    text = zstream.member_bytes(csv_names[0]).decode("utf-8", errors="replace")
+
+    best: dict | None = None
+    best_dist = float("inf")
+    # Longitude degrees shrink toward the poles, so weight by cos(lat) or a
+    # 1 deg lon offset scores the same as a 1 deg lat offset (~30 km).
+    lon_weight = np.cos(np.radians(lat))
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            rlat = float(row["Latitude"])
+            rlon = float(row["Longitude"])
+            dist = (rlat - lat) ** 2 + ((rlon - lon) * lon_weight) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best = {
+                    "zstream": zstream,
+                    "lat": rlat, "lon": rlon,
+                    "scan": int(row["Scan"]), "pixel": int(row["Pixel"]),
+                    "dist_deg": dist ** 0.5,
+                }
+        except (ValueError, KeyError):
+            continue
+
+    patch_half_km = PATCH_SIZE * meta["gsd_m"] / 1000 / 2
+    if best is None or best["dist_deg"] > patch_half_km / DEG_TO_KM_LAT:
+        return None
+
+    # Prefer the product's own recorded resolution over the spec constant.
+    best["gsd_m"] = meta["gsd_m"]
+    xml_names = [n for n in zstream.namelist() if n.lower().endswith(".xml")]
+    if xml_names:
+        xml = zstream.member_bytes(xml_names[0]).decode("utf-8", errors="replace")
+        m = re.search(r"pixel_resolution[^>]*>([\d.]+)<", xml, re.IGNORECASE)
+        if m:
+            best["gsd_m"] = float(m.group(1))
+    return best
+
+
 def extract_ch2_patch(match: dict, instrument: str, size: int = PATCH_SIZE) -> np.ndarray | None:
     """
     Read a `size × size` pixel patch centred on the matched scan/pixel from the
     CH2 binary raster inside the ZIP.
     """
     meta = INSTRUMENT_META[instrument]
-    zp = match["zip_path"]
     scan, pixel = match["scan"], match["pixel"]
     samples = meta["samples_per_line"]
     bps = 2 if meta["dtype"] != "uint8" else 1
@@ -167,6 +215,23 @@ def extract_ch2_patch(match: dict, instrument: str, size: int = PATCH_SIZE) -> n
     # patch instead of the full size x size window centred nearby.
     col_start = max(0, min(pixel - half, samples - size))
 
+    # Remote-zip path: read only the lines needed, inflating from the member
+    # start and stopping there, rather than transferring the whole archive.
+    zstream = match.get("zstream")
+    if zstream is not None:
+        img_names = [n for n in zstream.namelist()
+                     if n.lower().endswith(".img") and "browse" not in n.lower()]
+        if not img_names:
+            return None
+        total_lines = zstream.member_info(img_names[0])["file_size"] // (samples * bps)
+        line_start = max(0, min(scan - half, max(0, total_lines - size)))
+        arr = zstream.img_lines(img_names[0], samples, dtype, line_start, size)
+        crop = arr[:size, col_start:col_start + size]
+        if crop.shape[0] < size // 4 or crop.shape[1] < size // 4:
+            return None
+        return normalise_uint8(crop)
+
+    zp = match["zip_path"]
     with zipfile.ZipFile(zp) as zf:
         img_names = [n for n in zf.namelist()
                      if n.lower().endswith(".img") and "browse" not in n.lower()]

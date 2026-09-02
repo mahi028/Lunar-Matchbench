@@ -29,8 +29,9 @@ from lunar_matchbench.config import (
 from lunar_matchbench.core.downloader import (
     find_ch2_geometry_match, extract_ch2_patch,
     discover_lroc_products, open_lroc_reader, extract_lroc_patch,
+    find_ch2_geometry_match_streamed,
 )
-from lunar_matchbench.core.ch2_fetch import fetch_ch2_product, Ch2FetchError
+from lunar_matchbench.core.ch2_fetch import fetch_ch2_streamed, Ch2FetchError
 from lunar_matchbench.core.register import register
 from lunar_matchbench.utils.geo import BBox, overlap_report
 from lunar_matchbench.utils.image import make_checkerboard, make_difference_overlay
@@ -160,16 +161,19 @@ def run_pipeline(
                 _progress(1, f"Resolving PRADAN download path ({detail} candidate product(s))...")
             elif stage == "download":
                 _progress(1, f"Downloading {detail} from ISSDC/PRADAN...")
+            elif stage == "stream":
+                _progress(1, f"Streaming {detail} from ISSDC/PRADAN (byte-range)...")
             elif stage == "downloading":
                 _progress(1, f"Downloading from ISSDC/PRADAN... {detail / 1e6:.1f} MB")
 
         try:
-            fetched = fetch_ch2_product(lat, lon, instrument, progress_cb=_fetch_cb)
+            _, zstream = fetch_ch2_streamed(lat, lon, instrument, progress_cb=_fetch_cb)
         except Ch2FetchError as exc:
             return {"status": "FAILED", "reason": f"Could not fetch Chandrayaan-2 data from ISSDC: {exc}"}
 
-        if fetched is not None:
-            ch2_match = find_ch2_geometry_match(lat, lon, instrument)
+        if zstream is not None:
+            _progress(1, "Reading CH2 geometry grid (0.8 MB of 508 MB)...")
+            ch2_match = find_ch2_geometry_match_streamed(zstream, lat, lon, instrument)
 
     if ch2_match is None:
         return {
