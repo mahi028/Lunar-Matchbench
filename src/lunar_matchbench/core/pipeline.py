@@ -28,7 +28,7 @@ from lunar_matchbench.config import (
 )
 from lunar_matchbench.core.downloader import (
     find_ch2_geometry_match, extract_ch2_patch,
-    discover_lroc_products, download_lroc, extract_lroc_patch,
+    discover_lroc_products, open_lroc_reader, extract_lroc_patch,
 )
 from lunar_matchbench.core.ch2_fetch import fetch_ch2_product, Ch2FetchError
 from lunar_matchbench.core.register import register
@@ -165,8 +165,8 @@ def run_pipeline(
     loc_info = None
     skipped = []
     for candidate in candidates[:MAX_CANDIDATE_ATTEMPTS]:
-        _progress(3, f"Downloading LROC NAC {candidate['filename']}...")
-        path = download_lroc(candidate, verbose=True)
+        _progress(3, f"Opening LROC NAC {candidate['filename']} (byte-range stream)...")
+        path = open_lroc_reader(candidate)
 
         _progress(4, "Extracting co-located LROC NAC patch...")
         # Prefer the actual per-product resolution (CH2's own PDS4 label,

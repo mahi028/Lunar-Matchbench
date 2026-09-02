@@ -94,4 +94,10 @@ HTTP_TIMEOUT    = 60                 # seconds
 RANGE_CHUNK_MAX     = 64 * 1024 * 1024   # refuse absurd single reads
 LROC_SEARCH_MARGIN  = 0.5                # extra window height, as a fraction of raw_win
 MAX_LROC_WINDOWS    = 3                  # hard cap on windows fetched per product
+# Probing an in-memory buffer costs a SIFT pass, not a read, so the search is
+# denser than the old per-read LROC_SCAN_STEP allowed. The step is derived from
+# the buffer span so a small window still gets probed properly.
+LROC_PROBE_COUNT    = 12                 # coarse probes across a loaded window
+LROC_PROBE_STEP_MIN = 200                # lines; floor on the coarse step
+LROC_FINE_STEP_MIN  = 100                # lines; floor on the refinement step
 INFLATE_BUDGET      = 600 * 1024 * 1024  # max compressed bytes to stream-inflate
