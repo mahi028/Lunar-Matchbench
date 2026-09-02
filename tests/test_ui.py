@@ -210,3 +210,55 @@ def test_charts_are_absent_without_tiepoints(page, live_server):
     page.wait_for_selector("#charts", timeout=15000)
     assert page.locator(".chart-histogram").count() == 0
     assert "No correspondence data" in page.inner_text("#charts")
+
+
+def test_running_job_shows_progress_and_streamed_bytes(page, live_server):
+    _seed("uitest09", {
+        "status": "running",
+        "progress_step": 3,
+        "progress_total": 8,
+        "progress_msg": "Opening LROC NAC M1359306139LC.IMG (byte-range stream)...",
+        "transfer": {"fetched_bytes": 38_700_000, "cached_bytes": 0,
+                     "requests": 2, "product_bytes": 528_929_736},
+        "step_image_urls": {},
+    })
+    page.goto(f"{live_server}/?job=uitest09", wait_until="networkidle")
+    page.wait_for_selector(".steps", timeout=15000)
+
+    assert page.locator("#status-chip").get_attribute("data-state") == "running"
+    assert "38.7" in page.inner_text(".transfer-live"), "streamed MB must be shown live"
+    assert page.locator(".step[data-state='active']").count() == 1
+
+
+def test_full_strip_failure_is_called_a_genuine_mismatch(page, live_server):
+    _seed("uitest10", _failed_job(
+        confident=False, best_n=0, total_lines=15360, lines_searched=15360,
+        strip_fraction_searched=1.0, whole_strip_searched=True))
+    page.goto(f"{live_server}/?job=uitest10", wait_until="networkidle")
+    page.wait_for_selector("#diagnosis", timeout=15000)
+    text = page.inner_text("#diagnosis")
+    assert "entire LROC strip was searched" in text
+    assert "genuine content or illumination mismatch" in text
+
+
+def test_partial_strip_failure_is_not_called_a_mismatch(page, live_server):
+    _seed("uitest11", _failed_job(
+        confident=False, best_n=20, strip_fraction_searched=0.16,
+        whole_strip_searched=False))
+    page.goto(f"{live_server}/?job=uitest11", wait_until="networkidle")
+    page.wait_for_selector("#diagnosis", timeout=15000)
+    text = page.inner_text("#diagnosis")
+    assert "16%" in text
+    assert "genuine content or illumination mismatch" not in text
+
+
+def test_cache_served_run_is_not_shown_as_a_live_fetch(page, live_server):
+    cached = copy.deepcopy(DONE_JOB)
+    cached["result"]["transfer"] = {"fetched_bytes": 0, "cached_bytes": 326_800_000,
+                                    "requests": 1, "product_bytes": 155_600_000}
+    _seed("uitest12", cached)
+    page.goto(f"{live_server}/?job=uitest12", wait_until="networkidle")
+    page.wait_for_selector("#diagnosis", timeout=15000)
+    # inner_text returns rendered text, and the label is uppercased by CSS.
+    assert "served from cache" in page.inner_text("#diagnosis").lower()
+    assert page.locator("#status-chip").get_attribute("data-state") == "cache"

@@ -173,6 +173,9 @@ async def get_status(job_id: str):
         "progress_step":   job.get("progress_step", 0),
         "progress_total":  PROGRESS_TOTAL,
         "step_image_urls": job.get("step_image_urls", {}),
+        # The pipeline reports bytes as it goes; without this the live transfer
+        # counter in the UI has nothing to read and silently stays blank.
+        "transfer":        job.get("transfer", {}),
     }
 
 

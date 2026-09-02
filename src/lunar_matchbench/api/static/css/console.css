@@ -77,7 +77,8 @@
 }
 .field input:focus, .field select:focus { border-color: var(--nasa); outline: none; }
 
-.presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+.form-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
+.presets { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 1 1 auto; }
 .presets .eyebrow { margin-right: 2px; }
 .preset {
   background: transparent; border: 1px solid var(--rule); border-radius: 100px;
@@ -86,8 +87,11 @@
 }
 .preset:hover { border-color: var(--nasa); color: var(--signal); }
 
+/* Deliberately not full-bleed. A full-width saffron bar was the loudest thing
+   on the page and competed with the strip locator, which is the element this
+   console should be remembered by. Boldness gets spent once. */
 .run {
-  margin-top: 18px; width: 100%; padding: 12px;
+  margin-top: 18px; padding: 10px 22px; align-self: end;
   background: var(--isro); color: #14100D; border: 0; border-radius: 3px;
   font-family: var(--display); font-weight: 700; font-stretch: 110%;
   font-size: 14px; letter-spacing: .03em; cursor: pointer;
