@@ -192,3 +192,43 @@ def test_strip_preview_reads_the_requested_line(tmp_path):
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"] == "image/png"
     assert reader.asked == (20000 - 128, 256), reader.asked
+
+
+def test_strip_preview_is_not_anisotropic():
+    """A wide line window must be cropped square, not squashed into streaks."""
+    import cv2
+    import numpy as np
+
+    from lunar_matchbench.api import app as app_mod
+
+    class WideReader:
+        total_lines = 40000
+        total_samples = 5064          # far wider than the window is tall
+        stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
+
+        def read_lines(self, start, n):
+            rng = np.random.default_rng(9)
+            noise = rng.normal(500, 60, (n, self.total_samples))
+            return cv2.GaussianBlur(noise, (0, 0), 6).astype(np.float32)
+
+    app_mod._store("aniso", {
+        "status": app_mod.JobStatus.done,
+        "result": {"lroc_candidate": {"filename": "F.IMG", "url": "http://x/F.IMG"}},
+    })
+    import lunar_matchbench.core.downloader as dl
+    original = dl.open_lroc_reader
+    dl.open_lroc_reader = lambda *a, **k: WideReader()
+    try:
+        resp = client.get("/api/strip/aniso/preview.png?line=20000&height=320")
+    finally:
+        dl.open_lroc_reader = original
+
+    assert resp.status_code == 200, resp.text
+    img = cv2.imdecode(np.frombuffer(resp.content, np.uint8), cv2.IMREAD_GRAYSCALE)
+    assert img.shape == (256, 256)
+    # Isotropic terrain blurs equally along both axes; a squashed read would
+    # leave far more variance across rows than down columns.
+    row_var = float(np.var(np.diff(img.astype(np.float32), axis=1)))
+    col_var = float(np.var(np.diff(img.astype(np.float32), axis=0)))
+    ratio = max(row_var, col_var) / max(1e-6, min(row_var, col_var))
+    assert ratio < 4.0, f"preview is anisotropic: row/col gradient ratio {ratio:.1f}"

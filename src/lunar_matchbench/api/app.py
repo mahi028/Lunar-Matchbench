@@ -259,6 +259,15 @@ async def serve_strip_preview(job_id: str, line: int = 0, height: int = 320):
     if window.size == 0:
         raise HTTPException(status_code=404, detail="No imagery at that scan line")
 
+    # Crop the cross-track axis to the same extent as the along-track one before
+    # resizing. A full 5064-sample line squeezed into a 256 px square alongside
+    # only 320 lines smears the surface into vertical streaks -- unrecognisable
+    # as terrain, which defeats the point of previewing it.
+    if window.shape[1] > window.shape[0]:
+        keep = window.shape[0]
+        start_col = (window.shape[1] - keep) // 2
+        window = window[:, start_col:start_col + keep]
+
     valid = window[~np.isnan(window)]
     if valid.size < 500:
         raise HTTPException(status_code=404, detail="No imagery at that scan line")
