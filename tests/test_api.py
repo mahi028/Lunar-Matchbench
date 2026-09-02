@@ -232,3 +232,28 @@ def test_strip_preview_is_not_anisotropic():
     col_var = float(np.var(np.diff(img.astype(np.float32), axis=0)))
     ratio = max(row_var, col_var) / max(1e-6, min(row_var, col_var))
     assert ratio < 4.0, f"preview is anisotropic: row/col gradient ratio {ratio:.1f}"
+
+
+def test_finished_jobs_survive_a_restart(tmp_path, monkeypatch):
+    """A ?job= link must outlive the process, not just a browser reload."""
+    import json
+
+    from lunar_matchbench.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "JOB_DIR", tmp_path)
+    (tmp_path / "revived.json").write_text(json.dumps({
+        "status": "done",
+        "step_image_urls": {},
+        "result": {"metrics": {
+            "matcher": "SIFT", "n_inliers": 7, "n_raw_matches": 9,
+            "inlier_ratio_pct": 77.8, "rmse_px": 1.1,
+            "spatial_uniformity": 0.4, "elapsed_sec": 0.2,
+        }},
+    }), encoding="utf-8")
+
+    with app_mod._lock:
+        app_mod._jobs.pop("revived", None)
+
+    data = client.get("/api/result/revived").json()
+    assert data["status"] == "done"
+    assert data["metrics"]["n_inliers"] == 7

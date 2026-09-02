@@ -64,7 +64,22 @@ def _store(job_id: str, data: dict) -> None:
 
 def _read(job_id: str) -> dict | None:
     with _lock:
-        return _jobs.get(job_id)
+        job = _jobs.get(job_id)
+    if job is not None:
+        return job
+    # Finished runs are written to disk, so a ?job= link should survive a server
+    # restart, not just a browser reload. Without this the persistence was
+    # write-only and the link died with the process.
+    path = JOB_DIR / f"{job_id}.json"
+    if not path.exists():
+        return None
+    try:
+        restored = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    with _lock:
+        _jobs.setdefault(job_id, restored)
+        return _jobs[job_id]
 
 
 def _poster_url(path: str) -> str:
