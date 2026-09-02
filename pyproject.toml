@@ -44,6 +44,7 @@ norecursedirs = ["src_prot", ".venv", "issdc_ch2_output", "lroc_reference_output
 markers = [
     "network: touches live ISSDC/NASA services (deselected by default)",
     "downloads: legitimately exercises the bulk-download path",
+    "ui: drives a headless browser against a stubbed job (deselected by default)",
 ]
-addopts = "-m 'not network'"
+addopts = "-m 'not network and not ui'"
 
