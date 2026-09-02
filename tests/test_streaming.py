@@ -88,3 +88,50 @@ def test_refuses_negative_offset(range_server):
     rf = RangeFile(url, cache_dir=cache)
     with pytest.raises(ValueError):
         rf.read_range(-1, 64)
+
+
+def test_resume_discards_partial_when_server_restarts_from_zero(range_server, tmp_path):
+    """A 206 that starts at 0 when we asked for N must not be appended.
+
+    This reproduces the bug that made a fetched 713 MB CH2 zip exactly 240 MB
+    too large: every central-directory offset was shifted, so the archive still
+    listed its members correctly but the .img member failed to open with
+    'Bad magic number for file header'.
+    """
+    import requests
+
+    from lunar_matchbench.core.ch2_fetch import _IssdcSession, _download_file
+
+    url, state, _ = range_server
+    state.mode = "wrong_offset"
+
+    dest = tmp_path / "product.zip"
+    partial = dest.with_name(dest.name + ".part")
+    partial.write_bytes(state.payload[:4096])          # a half-finished download
+
+    session = _IssdcSession.__new__(_IssdcSession)     # bypass Keycloak login
+    session.session = requests.Session()
+    session.name = "test"
+
+    assert _download_file(session, url, dest, None) is True
+    assert dest.read_bytes() == state.payload, "resumed file must match the source exactly"
+
+
+def test_resume_appends_when_server_honours_the_offset(range_server, tmp_path):
+    """The happy path must still resume rather than restart from scratch."""
+    import requests
+
+    from lunar_matchbench.core.ch2_fetch import _IssdcSession, _download_file
+
+    url, state, _ = range_server
+    dest = tmp_path / "product.zip"
+    partial = dest.with_name(dest.name + ".part")
+    partial.write_bytes(state.payload[:4096])
+
+    session = _IssdcSession.__new__(_IssdcSession)
+    session.session = requests.Session()
+    session.name = "test"
+
+    assert _download_file(session, url, dest, None) is True
+    assert dest.read_bytes() == state.payload
+    assert state.request_log[-1] == "bytes=4096-", "should have asked to resume"

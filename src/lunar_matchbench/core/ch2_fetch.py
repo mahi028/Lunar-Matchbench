@@ -23,6 +23,7 @@ from typing import Callable
 import requests
 
 from lunar_matchbench.config import CH2_DATA_DIR
+from lunar_matchbench.core.streaming import _CONTENT_RANGE_RE
 
 WFS_URL = "https://chmapbrowse.issdc.gov.in/server/wfs"
 PRADAN_URL_PREFIX = "https://pradan.issdc.gov.in"
@@ -236,8 +237,22 @@ def _download_file(session: _IssdcSession, url: str, dest: Path, progress_cb: Pr
                                   timeout=(30, 600), allow_redirects=True) as r:
                 if r.status_code not in (200, 206):
                     raise RuntimeError(f"HTTP {r.status_code}")
-                mode = "ab" if resume_from and r.status_code == 206 else "wb"
-                downloaded = resume_from if mode == "ab" else 0
+
+                # A resumed request is only safe to append if the server really
+                # starts where we asked. Some servers answer 206 but stream from
+                # byte 0 regardless -- appending that duplicates the prefix and
+                # silently corrupts the file. Observed: a 713 MB CH2 zip that
+                # came out exactly 240 MB too large, whose central directory
+                # still parsed but whose .img member was unreadable because
+                # every stored offset had shifted. When the offset does not line
+                # up, throw the partial away and take the body from scratch.
+                append = False
+                if resume_from and r.status_code == 206:
+                    m = _CONTENT_RANGE_RE.search(r.headers.get("Content-Range", ""))
+                    append = bool(m) and int(m.group(1)) == resume_from
+
+                mode = "ab" if append else "wb"
+                downloaded = resume_from if append else 0
                 with open(partial, mode) as f:
                     for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
                         if not chunk:

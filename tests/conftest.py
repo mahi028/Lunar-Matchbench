@@ -60,8 +60,16 @@ class _RangeHandler(http.server.BaseHTTPRequestHandler):
         req_start = int(start_s)
         # An open-ended "bytes=N-" is legal and is what the resume path sends.
         req_end = int(end_s) if end_s else total - 1
-        start = 0 if STATE.mode == "wrong_offset" else req_start
-        body = STATE.payload[start:start + (req_end - req_start + 1)]
+
+        if STATE.mode == "wrong_offset":
+            # A server that ignores the start offset streams from the beginning
+            # rather than sending a truncated slice -- that is what makes the
+            # bug so damaging, since the body looks plausible and complete.
+            start = 0
+            body = STATE.payload[0:req_end + 1]
+        else:
+            start = req_start
+            body = STATE.payload[req_start:req_end + 1]
 
         self.send_response(206)
         self.send_header("Content-Range", f"bytes {start}-{start + len(body) - 1}/{total}")
