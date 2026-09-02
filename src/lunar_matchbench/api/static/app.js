@@ -106,6 +106,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const stepEl = document.getElementById(`step-${i}`);
       if (stepEl) stepEl.className = "step";
     }
+    const stepper = document.getElementById("stepper");
+    if (stepper) stepper.classList.remove("stepper--failed");
     stageKeys = [];
     stageUrls = {};
     currentIndex = -1;
@@ -117,6 +119,13 @@ document.addEventListener("DOMContentLoaded", () => {
     frontImg = stageImgA;
     backImg = stageImgB;
     stageViewer.hidden = true;
+  }
+
+  function markPipelineOutcome(success) {
+    // Eight green "done" pills above a failure banner is a contradiction; the
+    // steps did all execute, but they should not read as a successful run.
+    const stepper = document.getElementById("stepper");
+    if (stepper) stepper.classList.toggle("stepper--failed", !success);
   }
 
   function setStep(stepIndex) {
@@ -294,15 +303,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (tx && (tx.fetched_bytes || tx.cached_bytes)) {
+      const fetched = tx.fetched_bytes || 0;
+      const cached = tx.cached_bytes || 0;
       const total = tx.product_bytes
         ? ` of a ${fmtMB(tx.product_bytes)} product` : "";
+      // Headlining "0 MB" when every read came from disk reads as though nothing
+      // happened. Lead with whichever number describes what actually occurred,
+      // and always say which of the two it was -- a pre-warmed demo must never
+      // look like a live fetch.
+      const fromCache = fetched === 0 && cached > 0;
       rows.push(`
         <div class="diag-row diag-info">
-          <span class="diag-label">Data transferred</span>
-          <span class="diag-value">${fmtMB(tx.fetched_bytes)}</span>
+          <span class="diag-label">${fromCache ? "Served from cache" : "Data streamed"}</span>
+          <span class="diag-value">${fmtMB(fromCache ? cached : fetched)}</span>
           <span class="diag-detail">
-            streamed over ${tx.requests} byte-range request${tx.requests === 1 ? "" : "s"}${total}
-            ${tx.cached_bytes ? `&middot; ${fmtMB(tx.cached_bytes)} served from cache` : ""}
+            ${fromCache
+              ? `read from the local range cache${total} &mdash; no imagery pulled over the network this run`
+              : `over ${tx.requests} byte-range request${tx.requests === 1 ? "" : "s"}${total}` +
+                (cached ? ` &middot; plus ${fmtMB(cached)} from cache` : "")}
           </span>
         </div>`);
     }
@@ -312,6 +330,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function showSummary(success, errText, data) {
+    markPipelineOutcome(success);
     summaryTitle.textContent = success ? "Registration succeeded" : "Registration did not converge";
     errorMsg.hidden = !!success;
     if (!success) errorMsg.textContent = errText;

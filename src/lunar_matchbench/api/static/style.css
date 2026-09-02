@@ -228,3 +228,9 @@ footer a:hover { text-decoration: underline; }
   margin: 0 0 12px 2px; max-width: 78ch;
 }
 .diag-note strong { color: var(--ink); font-weight: 600; }
+
+/* A completed-but-failed run: the steps ran, but must not read as success. */
+.stepper--failed .step.done { background: var(--surface-2); color: var(--ink-muted); }
+.stepper--failed .step.done .step-dot { background: var(--border-strong); }
+.stepper--failed .step:last-child.done { background: var(--bad-bg); color: var(--bad); }
+.stepper--failed .step:last-child.done .step-dot { background: var(--bad); }
