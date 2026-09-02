@@ -2098,3 +2098,43 @@ git commit -m "test: add opt-in live checks for PDS range support"
 **Conditional work:** Task 10 is gated on a measured fact that does not exist yet — whether PRADAN honours byte ranges. The PDS host does; PRADAN is untested. Step 1 of that task settles it and Step 2 records the answer in the spec. If the answer is no, Steps 3-5 are skipped and CH2 keeps bulk-downloading, protected by the Task 2 integrity fix. The plan must not be executed as though the favourable answer were already known.
 
 **Ordering note:** Tasks 1-9 are independent of that verdict and can be completed either way. Task 10's probe can be run early, out of order, since its result changes only how much of Task 10 gets built.
+
+---
+
+## Execution Record (2026-09-03)
+
+All 11 tasks complete. 44 offline tests + 5 live tests passing.
+
+Findings that changed the plan during execution, recorded because each was a
+real defect rather than a plan detail:
+
+1. **PRADAN honours byte-ranges** (Task 10's gate). `HEAD` → `200`,
+   `Accept-Ranges: bytes`, `Content-Length: 508443288`; `GET bytes=0-1023` →
+   `206`. Task 10 therefore proceeded in full.
+2. **The corruption diagnosis was confirmed to the byte.** True product
+   508,443,288; corrupt local copy 748,451,120; difference 240,007,832 —
+   exactly the first member's recorded central-directory offset.
+3. **The test suite began downloading for real** once a working `.env` existed.
+   `TestClient` runs `BackgroundTasks` inline, so `test_post_registration_job`
+   was performing a live ISSDC fetch. Stubbed, and a suite-wide tripwire now
+   fails any offline test that reaches a bulk-download entry point.
+4. **`LROC_SCAN_STEP` was wrong for in-memory probing.** Its fixed 2500 lines
+   was sized for per-read probes and fitted only one probe into a small buffer,
+   missing planted matches entirely. The step is now derived from the buffer
+   span (`LROC_PROBE_COUNT`).
+5. **The 64 MB single-read ceiling rejected a legitimate window.** A real TMC
+   window is 78,643,920 bytes. Added `RangeFile.read_span`, which splits into
+   sequential single ranges; `read_range` remains the strict primitive.
+6. **Transient `RemoteDisconnected` killed a run.** Ranged reads now retry
+   transport failures a bounded number of times. Mis-served ranges are still
+   never retried — they go straight to validation.
+7. **A test fixture, not the code, caused the planted-match failure.** A raw
+   low-contrast reference (28 keypoints) was being matched against a
+   percentile-stretched candidate (1500 keypoints). Real CH2 references are
+   normalised by `extract_ch2_patch`, so production was already symmetric.
+
+### Deferred
+
+Spec §3.4 (the interactive mission-control UI) is Plan 2. This plan leaves
+`index.html`, `style.css` and `app.js` untouched; every new API field is
+optional, so the existing UI keeps working unchanged.
