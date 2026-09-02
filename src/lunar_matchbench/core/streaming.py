@@ -36,6 +36,44 @@ from lunar_matchbench.config import (
 _CONTENT_RANGE_RE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)", re.IGNORECASE)
 
 
+class TransferBudgetExceeded(RuntimeError):
+    """A run tried to move more bytes over the network than it is allowed."""
+
+
+class TransferBudget:
+    """A shared ceiling on network bytes for one registration run.
+
+    Streaming removes the need to transfer whole products, but nothing stopped
+    a run from fetching many large windows across several candidates: at TMC
+    scale the worst case reached roughly 1.1 GB, which is the very problem
+    streaming was meant to solve. Readers charge this before each fetch, so a
+    run fails with a clear reason instead of quietly saturating a connection.
+
+    Cached reads are free and are never charged -- a pre-warmed demo should not
+    be able to exhaust its own budget.
+    """
+
+    def __init__(self, limit_bytes: int):
+        self.limit = limit_bytes
+        self.used = 0
+
+    @property
+    def remaining(self) -> int:
+        return max(0, self.limit - self.used) if self.limit else 0
+
+    def charge(self, n_bytes: int) -> None:
+        if not self.limit:
+            return
+        if self.used + n_bytes > self.limit:
+            raise TransferBudgetExceeded(
+                f"this run would transfer {(self.used + n_bytes) / 1e6:.1f} MB, "
+                f"over its {self.limit / 1e6:.0f} MB budget "
+                f"({self.used / 1e6:.1f} MB already used). "
+                "Try a coordinate with better coverage, or raise RUN_BYTE_BUDGET."
+            )
+        self.used += n_bytes
+
+
 class RangeNotHonoured(RuntimeError):
     """The server did not serve the byte range that was requested."""
 
@@ -54,8 +92,10 @@ class RangeFile:
     """A read-only, file-like view over an HTTP resource, cached on disk."""
 
     def __init__(self, url: str, session: requests.Session | None = None,
-                 cache_dir: Path | None = None, headers: dict | None = None):
+                 cache_dir: Path | None = None, headers: dict | None = None,
+                 budget: "TransferBudget | None" = None):
         self.url = url
+        self.budget = budget
         self._session = session or requests.Session()
         self._headers = headers or {}
         self._cache_dir = Path(cache_dir) if cache_dir is not None else CACHE_DIR
@@ -158,6 +198,10 @@ class RangeFile:
             self.stats["cached_bytes"] += len(data)
             return data
 
+        # Charge before fetching, so the ceiling is enforced rather than observed.
+        if self.budget is not None:
+            self.budget.charge(length)
+
         end = offset + length - 1
         r = self._get_with_retry({**self._headers, "Range": f"bytes={offset}-{end}"})
 
@@ -244,6 +288,23 @@ class LocalLrocReader:
         self.total_samples = self.label["total_samples"]
         self.stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
 
+    @property
+    def expected_bytes(self) -> int:
+        """Size this product should be, according to its own label."""
+        return (self.label["data_offset"]
+                + self.total_lines * self.total_samples * 2)
+
+    @property
+    def is_complete(self) -> bool:
+        """False when the file on disk is shorter than its label declares.
+
+        A killed download leaves a truncated .IMG under the real filename.
+        Reading a window past its end silently returns zero lines, which then
+        looks like "no usable imagery here" rather than "this file is broken" --
+        that is how a documented-working benchmark coordinate started failing.
+        """
+        return self.path.stat().st_size >= self.expected_bytes
+
     def read_lines(self, start_line: int, n_lines: int):
         start_line = max(0, start_line)
         n_lines = max(0, min(n_lines, self.total_lines - start_line))
@@ -272,8 +333,8 @@ class LrocStream:
         self.total_samples = self.label["total_samples"]
 
     @classmethod
-    def open(cls, url: str, session=None, cache_dir=None) -> "LrocStream":
-        return cls(RangeFile(url, session=session, cache_dir=cache_dir))
+    def open(cls, url: str, session=None, cache_dir=None, budget=None) -> "LrocStream":
+        return cls(RangeFile(url, session=session, cache_dir=cache_dir, budget=budget))
 
     @property
     def stats(self) -> dict:
@@ -332,8 +393,8 @@ class Ch2ZipStream:
         self._entries = self._read_central_directory()
 
     @classmethod
-    def open(cls, url: str, session=None, cache_dir=None) -> "Ch2ZipStream":
-        return cls(RangeFile(url, session=session, cache_dir=cache_dir))
+    def open(cls, url: str, session=None, cache_dir=None, budget=None) -> "Ch2ZipStream":
+        return cls(RangeFile(url, session=session, cache_dir=cache_dir, budget=budget))
 
     @property
     def stats(self) -> dict:

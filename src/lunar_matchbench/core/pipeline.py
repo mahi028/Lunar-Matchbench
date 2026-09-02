@@ -24,7 +24,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from lunar_matchbench.config import (
-    PATCH_SIZE, POSTER_DIR, OVERLAP_DIR, INSTRUMENT_META, ensure_dirs,
+    PATCH_SIZE, POSTER_DIR, OVERLAP_DIR, INSTRUMENT_META, RUN_BYTE_BUDGET,
+    ensure_dirs,
 )
 from lunar_matchbench.core.downloader import (
     find_ch2_geometry_match, extract_ch2_patch,
@@ -32,6 +33,7 @@ from lunar_matchbench.core.downloader import (
     find_ch2_geometry_match_streamed,
 )
 from lunar_matchbench.core.ch2_fetch import fetch_ch2_streamed, Ch2FetchError
+from lunar_matchbench.core.streaming import TransferBudget, TransferBudgetExceeded
 from lunar_matchbench.core.register import register
 from lunar_matchbench.utils.geo import BBox, overlap_report
 from lunar_matchbench.utils.image import make_checkerboard, make_difference_overlay
@@ -137,6 +139,8 @@ def run_pipeline(
 
     transfer: dict = {"fetched_bytes": 0, "cached_bytes": 0,
                       "requests": 0, "product_bytes": 0}
+    # One shared ceiling for the whole run, across every product it touches.
+    budget = TransferBudget(RUN_BYTE_BUDGET)
 
     def _progress(step: int, msg: str):
         if progress_cb:
@@ -167,9 +171,12 @@ def run_pipeline(
                 _progress(1, f"Downloading from ISSDC/PRADAN... {detail / 1e6:.1f} MB")
 
         try:
-            _, zstream = fetch_ch2_streamed(lat, lon, instrument, progress_cb=_fetch_cb)
+            _, zstream = fetch_ch2_streamed(lat, lon, instrument,
+                                            progress_cb=_fetch_cb, budget=budget)
         except Ch2FetchError as exc:
             return {"status": "FAILED", "reason": f"Could not fetch Chandrayaan-2 data from ISSDC: {exc}"}
+        except TransferBudgetExceeded as exc:
+            return {"status": "FAILED", "reason": f"Transfer budget exhausted reading CH2 data: {exc}"}
 
         if zstream is not None:
             _progress(1, "Reading CH2 geometry grid (0.8 MB of 508 MB)...")
@@ -207,9 +214,10 @@ def run_pipeline(
     lroc_gsd = scale = None
     loc_info = None
     skipped = []
+    budget_error = None
     for candidate in candidates[:MAX_CANDIDATE_ATTEMPTS]:
         _progress(3, f"Opening LROC NAC {candidate['filename']} (byte-range stream)...")
-        path = open_lroc_reader(candidate)
+        path = open_lroc_reader(candidate, budget=budget)
 
         _progress(4, "Extracting co-located LROC NAC patch...")
         # Prefer the actual per-product resolution (CH2's own PDS4 label,
@@ -218,10 +226,16 @@ def run_pipeline(
         # acquisition and the config constant is only a rough average.
         candidate_gsd = candidate.get("gsd_m")
         candidate_scale = (ch2_gsd / candidate_gsd) if candidate_gsd else INSTRUMENT_META[instrument]["scale_factor"]
-        patch, candidate_loc_info = extract_lroc_patch(
-            path, candidate, lat, lon,
-            ref_patch=ch2_patch, scale_factor=candidate_scale,
-        )
+        try:
+            patch, candidate_loc_info = extract_lroc_patch(
+                path, candidate, lat, lon,
+                ref_patch=ch2_patch, scale_factor=candidate_scale,
+            )
+        except TransferBudgetExceeded as exc:
+            # Stop the candidate sweep rather than letting each further
+            # candidate re-raise; the budget is shared and already spent.
+            budget_error = str(exc)
+            break
         if patch is not None:
             best, lroc_path, lroc_patch = candidate, path, patch
             lroc_gsd, scale, loc_info = candidate_gsd, candidate_scale, candidate_loc_info
@@ -231,7 +245,9 @@ def run_pipeline(
 
     if lroc_patch is None:
         reason = "Failed to extract a usable LROC patch."
-        if skipped:
+        if budget_error:
+            reason = f"Transfer budget exhausted while reading LROC data: {budget_error}"
+        elif skipped:
             reason += f" Skipped {len(skipped)} unusable candidate(s) (no real surface content found): {', '.join(skipped)}."
         return {"status": "FAILED", "reason": reason}
 

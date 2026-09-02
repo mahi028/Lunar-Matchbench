@@ -462,3 +462,48 @@ def test_stream_reader_splits_oversized_windows(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_truncated_local_product_is_detected(tmp_path):
+    """A killed download leaves a short .IMG under the real product name.
+
+    Reading past its end returns zero lines, which reads as empty imagery
+    rather than a broken file -- that is how a documented-working benchmark
+    coordinate silently started failing.
+    """
+    path, _ = _synthetic_pds3(tmp_path)
+    full = LocalLrocReader(path)
+    assert full.is_complete is True
+
+    truncated = tmp_path / "cut.IMG"
+    truncated.write_bytes(path.read_bytes()[:len(PDS3_LABEL) + 20])
+    short = LocalLrocReader(truncated)
+    assert short.is_complete is False
+    assert short.expected_bytes == full.expected_bytes
+
+
+def test_transfer_budget_stops_a_runaway_run(range_server):
+    """A run must fail loudly rather than quietly transferring a gigabyte."""
+    from lunar_matchbench.core.streaming import TransferBudget, TransferBudgetExceeded
+
+    url, state, cache = range_server
+    budget = TransferBudget(1000)
+    rf = RangeFile(url, cache_dir=cache, budget=budget)
+    rf.read_range(0, 600)
+    assert budget.used == 600
+    with pytest.raises(TransferBudgetExceeded):
+        rf.read_range(2000, 600)
+
+
+def test_cached_reads_do_not_consume_budget(range_server, tmp_path):
+    """A pre-warmed demo must not be able to exhaust its own budget."""
+    from lunar_matchbench.core.streaming import TransferBudget
+
+    url, state, cache = range_server
+    RangeFile(url, cache_dir=cache).read_range(0, 4096)      # warm it
+
+    budget = TransferBudget(100)
+    rf = RangeFile(url, cache_dir=cache, budget=budget)
+    rf.read_range(0, 4096)
+    assert budget.used == 0
+    assert rf.stats["cached_bytes"] == 4096

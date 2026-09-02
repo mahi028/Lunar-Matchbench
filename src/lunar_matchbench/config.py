@@ -97,6 +97,12 @@ RANGE_MAX_RETRIES   = 3                  # attempts per ranged read
 RANGE_RETRY_WAIT    = 1.5                # seconds, multiplied by attempt
 LROC_SEARCH_MARGIN  = 0.5                # extra window height, as a fraction of raw_win
 MAX_LROC_WINDOWS    = 3                  # hard cap on windows fetched per product
+# Each LROC window costs buffer_lines * samples * 2 bytes -- 77 MB at TMC scale,
+# so three windows across three candidates can reach ~1.1 GB, which defeats the
+# point of streaming. This is an absolute ceiling on network bytes for one
+# registration: reaching it fails the run with a clear reason rather than
+# quietly transferring a gigabyte.
+RUN_BYTE_BUDGET     = 700 * 1024 * 1024
 # Probing an in-memory buffer costs a SIFT pass, not a read, so the search is
 # denser than the old per-read LROC_SCAN_STEP allowed. The step is derived from
 # the buffer span so a small window still gets probed properly.

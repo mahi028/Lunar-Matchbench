@@ -30,28 +30,44 @@ from lunar_matchbench.config import (
 )
 from lunar_matchbench.utils.image import normalise_uint8, resize_to, has_real_content
 from lunar_matchbench.utils.geo import DEG_TO_KM_LAT
-from lunar_matchbench.core.streaming import LocalLrocReader, LrocStream
+from lunar_matchbench.core.streaming import (
+    LocalLrocReader, LrocStream, _CONTENT_RANGE_RE,
+)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
-    """Download url → dest with resume support. Returns dest path."""
+    """Download url -> dest. Returns dest path.
+
+    Written to a .part file and renamed only once the transfer completes, so an
+    interrupted download can never leave a truncated file sitting under the real
+    product name where later runs would trust it. A truncated M1359306139LC.IMG
+    left behind by a killed run is exactly what made a documented-working
+    benchmark coordinate start failing.
+    """
     if dest.exists() and dest.stat().st_size > 0:
         return dest
+    partial = dest.with_name(dest.name + ".part")
     headers = {}
     existing = 0
-    if dest.exists():
-        existing = dest.stat().st_size
+    if partial.exists():
+        existing = partial.stat().st_size
         headers["Range"] = f"bytes={existing}-"
 
     with requests.get(url, headers=headers, stream=True, timeout=HTTP_TIMEOUT) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0)) + existing
-        mode = "ab" if existing else "wb"
-        downloaded = existing
+        # Only append when the server confirms it resumed where we asked; a 206
+        # that restarts at zero would otherwise duplicate the prefix.
+        append = False
+        if existing and r.status_code == 206:
+            m = _CONTENT_RANGE_RE.search(r.headers.get("Content-Range", ""))
+            append = bool(m) and int(m.group(1)) == existing
+        mode = "ab" if append else "wb"
+        downloaded = existing if append else 0
         t0 = time.time()
-        with open(dest, mode) as f:
+        with open(partial, mode) as f:
             for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK):
                 if chunk:
                     f.write(chunk)
@@ -65,6 +81,7 @@ def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
                             print(f"\r  Downloaded {downloaded/1e6:.1f} MB  @ {rate:.1f} MB/s", end="", flush=True)
     if verbose:
         print()
+    partial.replace(dest)
     return dest
 
 
@@ -339,7 +356,7 @@ def download_lroc(candidate: dict, verbose: bool = True) -> Path:
     return _http_download(candidate["url"], dest, verbose=verbose)
 
 
-def open_lroc_reader(candidate: dict, prefer_stream: bool = True):
+def open_lroc_reader(candidate: dict, prefer_stream: bool = True, budget=None):
     """Return a line-window reader for an LROC product.
 
     A cached local copy always wins -- it is faster and costs no bandwidth.
@@ -349,11 +366,21 @@ def open_lroc_reader(candidate: dict, prefer_stream: bool = True):
     fname = candidate["filename"]
     for d in LROC_SEARCH_DIRS:
         local = d / fname
-        if local.exists() and local.stat().st_size > 0:
-            return LocalLrocReader(local)
+        if not (local.exists() and local.stat().st_size > 0):
+            continue
+        reader = LocalLrocReader(local)
+        # "Non-empty" is not "complete". An interrupted download leaves a
+        # truncated .IMG under the real filename, and reads past its end come
+        # back as zero lines -- indistinguishable from empty imagery unless the
+        # size is checked against what the label itself declares.
+        if reader.is_complete:
+            return reader
+        print(f"  Ignoring truncated local product {local.name} "
+              f"({local.stat().st_size / 1e6:.1f} MB of "
+              f"{reader.expected_bytes / 1e6:.1f} MB); streaming instead.")
     if not prefer_stream:
         return LocalLrocReader(download_lroc(candidate, verbose=False))
-    return LrocStream.open(candidate["url"])
+    return LrocStream.open(candidate["url"], budget=budget)
 
 
 def extract_lroc_patch(

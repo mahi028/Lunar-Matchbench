@@ -339,7 +339,7 @@ def _resolve_first_reachable(pradan_session, candidates, progress_cb=None):
 
 def fetch_ch2_streamed(
     lat: float, lon: float, instrument: str,
-    bbox: float = 0.2, progress_cb: ProgressCB | None = None,
+    bbox: float = 0.2, progress_cb: ProgressCB | None = None, budget=None,
 ):
     """Open a CH2 product as a remote ZIP without downloading it.
 
@@ -366,7 +366,8 @@ def fetch_ch2_streamed(
         return None, None
     if progress_cb:
         progress_cb("stream", filename)
-    return filename, Ch2ZipStream.open(url, session=pradan_session.session)
+    return filename, Ch2ZipStream.open(url, session=pradan_session.session,
+                                       budget=budget)
 
 
 def fetch_ch2_product(
