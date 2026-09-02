@@ -14,7 +14,7 @@ def test_serve_ui():
     response = client.get("/")
     assert response.status_code == 200
     assert "Lunar-MatchBench" in response.text
-    assert "Registration Parameters" in response.text
+    assert "Target" in response.text
 
 
 def test_status_not_found():
@@ -133,3 +133,20 @@ def test_failed_job_still_exposes_tiepoints():
     data = client.get(f"/api/result/{job_id}").json()
     assert data["status"] == "failed"
     assert data["tiepoints"]["residuals_px"] == [42.0]
+
+
+def test_ui_serves_console_shell():
+    """The console shell and its module entry point must both be reachable."""
+    response = client.get("/")
+    assert response.status_code == 200
+    body = response.text
+    assert "Lunar-MatchBench" in body
+    for element_id in ("run-form", "locator", "stage", "panels", "status-chip"):
+        assert f'id="{element_id}"' in body, f"missing #{element_id}"
+    assert 'type="module"' in body
+    assert "/static/js/main.js" in body
+
+
+def test_ui_static_assets_are_served():
+    for path in ("/static/css/tokens.css", "/static/css/console.css"):
+        assert client.get(path).status_code == 200, path
