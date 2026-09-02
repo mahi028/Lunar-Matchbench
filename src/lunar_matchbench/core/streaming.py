@@ -240,3 +240,153 @@ class LrocStream:
         raw = self.rf.read_range(self.label["data_offset"] + start_line * row,
                                  n_lines * row)
         return _decode_lines(raw, self.total_samples)
+
+
+# ── Remote ZIP reader ────────────────────────────────────────────────────────
+
+import struct
+import zlib
+
+EOCD_SIG = b"PK\x05\x06"
+CEN_SIG = b"PK\x01\x02"
+LFH_SIG = b"PK\x03\x04"
+EOCD_PROBE = 65536           # enough for the EOCD plus a normal comment
+INFLATE_CHUNK = 4 * 1024 * 1024   # compressed bytes pulled per inflate step
+
+
+class Ch2ZipStream:
+    """Read individual members out of a remote ZIP without downloading it all.
+
+    ISSDC CH2 products store their raster DEFLATE-compressed, so the image
+    cannot be seeked into -- but the geometry CSV that says WHICH scan line a
+    coordinate falls on is under a megabyte, and that is the part the pipeline
+    needs first. Reading it costs two small ranged reads instead of 508 MB.
+
+    For the raster itself, `img_lines` inflates from the member start and stops
+    as soon as the requested lines have been produced. Cost is therefore
+    proportional to how deep the target scan line sits in the strip: cheap near
+    the beginning, worst-case the whole member near the end. That is a real
+    limitation of DEFLATE, not an implementation shortcut.
+
+    Offsets are validated at both levels -- the central directory must actually
+    begin with a central-directory signature, and each member's local header
+    must begin with a local-header signature. A real archive failed exactly
+    this way after a bad resume duplicated 240,007,832 bytes at its front: the
+    directory still listed every member, but every offset in it pointed into
+    the middle of compressed data.
+    """
+
+    def __init__(self, rf: RangeFile):
+        self.rf = rf
+        self.inflated_bytes = 0
+        self._entries = self._read_central_directory()
+
+    @classmethod
+    def open(cls, url: str, session=None, cache_dir=None) -> "Ch2ZipStream":
+        return cls(RangeFile(url, session=session, cache_dir=cache_dir))
+
+    @property
+    def stats(self) -> dict:
+        return self.rf.stats
+
+    def namelist(self) -> list[str]:
+        return list(self._entries)
+
+    def member_info(self, name: str) -> dict:
+        return self._entries[name]
+
+    # ── central directory ───────────────────────────────────────────────────
+    def _read_central_directory(self) -> dict:
+        size = self.rf.size
+        probe_len = min(EOCD_PROBE, size)
+        tail = self.rf.read_range(size - probe_len, probe_len)
+        idx = tail.rfind(EOCD_SIG)
+        if idx < 0:
+            raise RangeNotHonoured(self.rf.url, size - probe_len, probe_len,
+                                   "no End Of Central Directory record found")
+        cen_size, cen_off = struct.unpack("<II", tail[idx + 12: idx + 20])
+        cen = self.rf.read_range(cen_off, cen_size)
+
+        if not cen.startswith(CEN_SIG):
+            raise RangeNotHonoured(
+                self.rf.url, cen_off, cen_size,
+                "the central directory does not start with a central-directory "
+                "signature -- the archive's offsets are shifted, which is what a "
+                "bad resume does when it duplicates bytes at the front",
+            )
+
+        entries: dict = {}
+        p = 0
+        while p + 46 <= len(cen) and cen[p:p + 4] == CEN_SIG:
+            method, = struct.unpack("<H", cen[p + 10: p + 12])
+            comp_size, uncomp_size = struct.unpack("<II", cen[p + 20: p + 28])
+            n_len, x_len, c_len = struct.unpack("<HHH", cen[p + 28: p + 34])
+            local_off, = struct.unpack("<I", cen[p + 42: p + 46])
+            name = cen[p + 46: p + 46 + n_len].decode("utf-8", errors="replace")
+            entries[name] = {
+                "method": method,
+                "compress_size": comp_size,
+                "file_size": uncomp_size,
+                "local_offset": local_off,
+            }
+            p += 46 + n_len + x_len + c_len
+        return entries
+
+    def _data_offset(self, entry: dict) -> int:
+        """Resolve a member's payload offset by reading its local file header."""
+        hdr = self.rf.read_range(entry["local_offset"], 30)
+        if hdr[:4] != LFH_SIG:
+            raise RangeNotHonoured(
+                self.rf.url, entry["local_offset"], 30,
+                "local file header magic missing -- the archive is corrupt or "
+                "its offsets are shifted",
+            )
+        n_len, x_len = struct.unpack("<HH", hdr[26:30])
+        return entry["local_offset"] + 30 + n_len + x_len
+
+    # ── whole small members ─────────────────────────────────────────────────
+    def member_bytes(self, name: str) -> bytes:
+        entry = self._entries[name]
+        raw = self.rf.read_range(self._data_offset(entry), entry["compress_size"])
+        if entry["method"] == 0:
+            data = raw
+        else:
+            data = zlib.decompressobj(-zlib.MAX_WBITS).decompress(raw)
+        self.inflated_bytes += len(data)
+        return data
+
+    # ── raster line windows with early stop ─────────────────────────────────
+    def img_lines(self, name: str, samples: int, dtype: str,
+                  start_line: int, n_lines: int):
+        import numpy as np
+
+        entry = self._entries[name]
+        bps = 1 if dtype == "uint8" else 2
+        row = samples * bps
+        need_end = (start_line + n_lines) * row
+        data_off = self._data_offset(entry)
+
+        if entry["method"] == 0:
+            # Stored: seekable, so read precisely the window.
+            raw = self.rf.read_range(data_off + start_line * row, n_lines * row)
+            self.inflated_bytes += len(raw)
+        else:
+            dec = zlib.decompressobj(-zlib.MAX_WBITS)
+            out = bytearray()
+            pos = 0
+            remaining = entry["compress_size"]
+            chunk = INFLATE_CHUNK
+            while remaining > 0 and len(out) < need_end:
+                take = min(chunk, remaining)
+                out += dec.decompress(self.rf.read_range(data_off + pos, take))
+                pos += take
+                remaining -= take
+                if dec.eof:
+                    break
+            self.inflated_bytes += len(out)
+            raw = bytes(out[start_line * row: need_end])
+
+        n = len(raw) // row
+        if n == 0:
+            return np.empty((0, samples), dtype=np.float32)
+        return np.frombuffer(raw[: n * row], dtype=dtype).reshape(n, samples).astype(np.float32)

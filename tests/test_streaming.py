@@ -275,3 +275,106 @@ def test_stream_reader_requests_only_the_lines_asked_for(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ── Remote ZIP reader ────────────────────────────────────────────────────────
+
+import io
+import zipfile
+
+from lunar_matchbench.core import streaming as streaming_mod
+from lunar_matchbench.core.streaming import Ch2ZipStream
+
+# Big enough that a 64 KB EOCD probe is genuinely partial, and incompressible
+# so DEFLATE cannot shrink it into a single chunk -- both properties are what
+# make the streaming behaviour observable at all.
+_ZIP_LINES, _ZIP_SAMPLES = 400, 512
+
+
+def _zip_blob():
+    """A zip shaped like a CH2 product: a small CSV and a large DEFLATE raster."""
+    rng = np.random.default_rng(11)
+    raster = rng.integers(0, 65535, _ZIP_LINES * _ZIP_SAMPLES,
+                          dtype="<u2").tobytes()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("geometry/grid.csv",
+                   "Longitude,Latitude,Pixel,Scan\n1,2,3,4\n")
+        z.writestr("data/scene_d_img.img", raster)
+    return buf.getvalue(), raster
+
+
+def test_zip_stream_lists_members(tmp_path):
+    blob, _ = _zip_blob()
+    srv, url = _serve_blob(blob)
+    try:
+        z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+        assert "geometry/grid.csv" in z.namelist()
+        assert "data/scene_d_img.img" in z.namelist()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_zip_stream_reads_small_member_without_whole_file(tmp_path):
+    """Reaching the geometry CSV must not cost the whole archive."""
+    blob, _ = _zip_blob()
+    srv, url = _serve_blob(blob)
+    try:
+        z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+        csv_bytes = z.member_bytes("geometry/grid.csv")
+        assert csv_bytes.startswith(b"Longitude,Latitude,Pixel,Scan")
+        assert z.stats["fetched_bytes"] < len(blob), "must not have pulled the whole zip"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_zip_stream_img_lines_match_source(tmp_path):
+    blob, raster = _zip_blob()
+    srv, url = _serve_blob(blob)
+    try:
+        z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+        got = z.img_lines("data/scene_d_img.img", samples=_ZIP_SAMPLES, dtype="<u2",
+                          start_line=5, n_lines=3)
+        expected = np.frombuffer(raster, dtype="<u2").reshape(_ZIP_LINES, _ZIP_SAMPLES)[5:8]
+        np.testing.assert_array_equal(got, expected.astype(np.float32))
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_zip_stream_img_lines_stop_early(tmp_path, monkeypatch):
+    """Reading line 0 must inflate far less than the whole member.
+
+    The chunk size is shrunk so the effect is visible on a test-sized product;
+    on a real 508 MB archive the 4 MB default already gives the same behaviour.
+    """
+    monkeypatch.setattr(streaming_mod, "INFLATE_CHUNK", 32 * 1024)
+    blob, raster = _zip_blob()
+    srv, url = _serve_blob(blob)
+    try:
+        z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+        z.img_lines("data/scene_d_img.img", samples=_ZIP_SAMPLES, dtype="<u2",
+                    start_line=0, n_lines=1)
+        assert z.inflated_bytes < len(raster) / 2
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_zip_stream_rejects_shifted_offsets(tmp_path):
+    """A corrupt archive must fail loudly, the way the real one did.
+
+    Prepending bytes is exactly what the bad resume did: the directory still
+    lists every member, but each recorded offset now points into the middle of
+    compressed data.
+    """
+    blob, _ = _zip_blob()
+    srv, url = _serve_blob(bytes(4096) + blob)
+    try:
+        with pytest.raises(RangeNotHonoured):
+            Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
+    finally:
+        srv.shutdown()
+        srv.server_close()
