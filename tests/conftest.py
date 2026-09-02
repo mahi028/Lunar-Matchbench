@@ -90,3 +90,33 @@ def range_server(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@pytest.fixture(autouse=True)
+def _no_bulk_downloads(request, monkeypatch):
+    """Fail any offline test that tries to transfer a whole science product.
+
+    A 508 MB CH2 archive appeared in data_store/ch2 during a test session, and
+    post-hoc it was not possible to prove which test pulled it. Rather than
+    guess, every bulk-download entry point is replaced with a tripwire for the
+    offline suite. Tests that legitimately exercise the download path opt in
+    with @pytest.mark.downloads, and live tests are exempt via -m network.
+    """
+    if "network" in request.keywords or "downloads" in request.keywords:
+        return
+
+    from lunar_matchbench.core import ch2_fetch, downloader
+
+    def _boom(*args, **kwargs):
+        raise AssertionError(
+            "a test attempted a bulk product download; offline tests must "
+            "stream or use fixtures"
+        )
+
+    for mod, name in (
+        (ch2_fetch, "_download_file"),
+        (ch2_fetch, "fetch_ch2_product"),
+        (downloader, "_http_download"),
+        (downloader, "download_lroc"),
+    ):
+        monkeypatch.setattr(mod, name, _boom)

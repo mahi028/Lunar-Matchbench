@@ -8,10 +8,23 @@
 
 ## 🚀 Key Features
 
+- **Byte-Range Streaming**: A run fetches only the bytes it needs instead of
+  downloading whole products. Measured against the live archives:
+
+  | Product | Full size | Transferred |
+  |---|---|---|
+  | LROC NAC `.IMG` | 529 MB | 38.7 MB (TMC-2 window) / 1.9 MB (OHRC) |
+  | CH2 TMC-2 `.zip` | 508 MB | 0.79 MB geometry CSV + a line window |
+
+  Both `pds.lroc.im-ldi.com` and `pradan.issdc.gov.in` honour single byte-ranges.
+  Multi-range requests are **not** supported by the PDS host — it ignores them and
+  returns the entire body — so the reader issues one contiguous interval per
+  request. Every response's `Content-Range` is validated against what was asked
+  for; see `tests/test_live.py`, which fails loudly if either fact changes.
 - **End-to-End Autonomous Pipeline**: Enter lunar coordinates (`lat`, `lon`), and the engine automatically:
   1. Searches ISRO pushbroom geometry CSVs to locate the exact scan line & pixel.
   2. Queries NASA ODE REST API to discover overlapping calibrated LROC NAC images (`CDRNAC4`).
-  3. Downloads and caches the PDS product.
+  3. Streams just the needed window of the PDS product, caching each range on disk.
   4. Runs a coarse-to-fine descriptor scan to resolve ephemeris/cross-track offsets.
   5. Performs sub-pixel cross-mission registration using **XFeat (CVPR 2024)** + MAGSAC++ homography.
   6. Generates 6-panel verification posters, geographic footprint overlap maps, and SHA-256 sensor provenance.
@@ -77,10 +90,35 @@ uv run lunar-matchbench register --lat 15.0 --lon 289.2 --instrument tmc --match
 uv run lunar-matchbench register --lat 15.0 --lon 289.2 --instrument ohrc --matcher xfeat
 ```
 
-### 3. Run Automated Tests
+### 3. Pre-warm the cache before a demo
 
 ```powershell
-uv run pytest
+uv run lunar-matchbench warm --instrument tmc
+```
+
+Pre-fetches the UI's preset coordinates into the byte-range cache so those runs
+return in seconds. A coordinate typed live still runs genuinely against the
+archives, and the UI always reports whether a fetch was served from cache or
+from the network.
+
+### 4. Run Automated Tests
+
+```powershell
+uv run pytest              # offline suite, no network
+uv run pytest -m network   # opt-in live checks against ISSDC and NASA
+```
+
+The offline suite is hermetic. Live tests are deselected by default so the
+suite stays fast and works without credentials.
+
+### Credentials
+
+Streaming CH2 data needs an ISSDC/PRADAN account. Copy `.env.example` to `.env`
+and fill it in; `.env` is gitignored.
+
+```
+PRADAN_USERNAME=your_issdc_username
+PRADAN_PASSWORD=your_issdc_password
 ```
 
 ---

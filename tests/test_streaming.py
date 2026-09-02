@@ -90,6 +90,7 @@ def test_refuses_negative_offset(range_server):
         rf.read_range(-1, 64)
 
 
+@pytest.mark.downloads
 def test_resume_discards_partial_when_server_restarts_from_zero(range_server, tmp_path):
     """A 206 that starts at 0 when we asked for N must not be appended.
 
@@ -117,6 +118,7 @@ def test_resume_discards_partial_when_server_restarts_from_zero(range_server, tm
     assert dest.read_bytes() == state.payload, "resumed file must match the source exactly"
 
 
+@pytest.mark.downloads
 def test_resume_appends_when_server_honours_the_offset(range_server, tmp_path):
     """The happy path must still resume rather than restart from scratch."""
     import requests
@@ -436,6 +438,27 @@ def test_streamed_ch2_rejects_far_coordinate(tmp_path):
     try:
         z = Ch2ZipStream.open(url, cache_dir=tmp_path / "c")
         assert find_ch2_geometry_match_streamed(z, -40.0, 100.0, "tmc") is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_stream_reader_splits_oversized_windows(tmp_path, monkeypatch):
+    """A window larger than the single-read ceiling must be split, not refused.
+
+    A real TMC-scale LROC window is ~78.6 MB against a 64 MB ceiling, which
+    failed a live run outright with 'refusing a single 78643920 byte read'.
+    """
+    path, pixels = _synthetic_pds3(tmp_path)
+    srv, url = _serve_blob(path.read_bytes())
+    try:
+        # Force a tiny ceiling so both the label probe and the 8-line read
+        # have to be split across several single-range requests.
+        monkeypatch.setattr(streaming_mod, "RANGE_CHUNK_MAX", 64)
+        stream = LrocStream.open(url, cache_dir=tmp_path / "c")
+        window = stream.read_lines(0, 8)
+        assert window.shape == (8, 10)
+        np.testing.assert_array_equal(window[1:], pixels[1:].astype(np.float32))
     finally:
         srv.shutdown()
         srv.server_close()

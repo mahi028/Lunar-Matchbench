@@ -114,15 +114,40 @@ class RangeFile:
         key = hashlib.sha256(self.url.encode()).hexdigest()[:16]
         return self._cache_dir / key / f"{offset}-{length}.bin"
 
+    # ── arbitrary-length reads ──────────────────────────────────────────────
+    def read_span(self, offset: int, length: int) -> bytes:
+        """Read any length, splitting into sequential single-range requests.
+
+        read_range deliberately refuses an oversized single request; a real TMC
+        window is ~78.6 MB against a 64 MB ceiling and a live run died on
+        exactly that. Callers that want a span should not have to think about
+        the ceiling, and splitting also bounds what a dropped connection costs:
+        a retry re-fetches one chunk rather than the whole window.
+        """
+        import lunar_matchbench.core.streaming as _self
+
+        limit = _self.RANGE_CHUNK_MAX
+        if length <= limit:
+            return self.read_range(offset, length)
+        parts = []
+        pos = 0
+        while pos < length:
+            take = min(limit, length - pos)
+            parts.append(self.read_range(offset + pos, take))
+            pos += take
+        return b"".join(parts)
+
     # ── the one read primitive ──────────────────────────────────────────────
     def read_range(self, offset: int, length: int) -> bytes:
         """Return the bytes at [offset, offset+length), or fewer at EOF."""
+        import lunar_matchbench.core.streaming as _self
+
         if length <= 0:
             raise ValueError(f"length must be positive, got {length}")
-        if length > RANGE_CHUNK_MAX:
+        if length > _self.RANGE_CHUNK_MAX:
             raise ValueError(
-                f"refusing a single {length} byte read (max {RANGE_CHUNK_MAX}); "
-                "split it into sequential reads"
+                f"refusing a single {length} byte read (max {_self.RANGE_CHUNK_MAX}); "
+                "use read_span, which splits into sequential reads"
             )
         if offset < 0:
             raise ValueError(f"offset must be non-negative, got {offset}")
@@ -242,7 +267,7 @@ class LrocStream:
     def __init__(self, rf: RangeFile):
         self.rf = rf
         probe = min(PDS3_LABEL_PROBE, rf.size)
-        self.label = parse_pds3_label(rf.read_range(0, probe))
+        self.label = parse_pds3_label(rf.read_span(0, probe))
         self.total_lines = self.label["total_lines"]
         self.total_samples = self.label["total_samples"]
 
@@ -259,10 +284,12 @@ class LrocStream:
         n_lines = max(0, min(n_lines, self.total_lines - start_line))
         if n_lines == 0:
             return _decode_lines(b"", self.total_samples)
+
         row = self.total_samples * 2
-        raw = self.rf.read_range(self.label["data_offset"] + start_line * row,
-                                 n_lines * row)
-        return _decode_lines(raw, self.total_samples)
+        base = self.label["data_offset"] + start_line * row
+        # read_span splits an oversized window into sequential single ranges.
+        return _decode_lines(self.rf.read_span(base, n_lines * row),
+                             self.total_samples)
 
 
 # ── Remote ZIP reader ────────────────────────────────────────────────────────
@@ -322,13 +349,13 @@ class Ch2ZipStream:
     def _read_central_directory(self) -> dict:
         size = self.rf.size
         probe_len = min(EOCD_PROBE, size)
-        tail = self.rf.read_range(size - probe_len, probe_len)
+        tail = self.rf.read_span(size - probe_len, probe_len)
         idx = tail.rfind(EOCD_SIG)
         if idx < 0:
             raise RangeNotHonoured(self.rf.url, size - probe_len, probe_len,
                                    "no End Of Central Directory record found")
         cen_size, cen_off = struct.unpack("<II", tail[idx + 12: idx + 20])
-        cen = self.rf.read_range(cen_off, cen_size)
+        cen = self.rf.read_span(cen_off, cen_size)
 
         if not cen.startswith(CEN_SIG):
             raise RangeNotHonoured(
@@ -370,7 +397,7 @@ class Ch2ZipStream:
     # ── whole small members ─────────────────────────────────────────────────
     def member_bytes(self, name: str) -> bytes:
         entry = self._entries[name]
-        raw = self.rf.read_range(self._data_offset(entry), entry["compress_size"])
+        raw = self.rf.read_span(self._data_offset(entry), entry["compress_size"])
         if entry["method"] == 0:
             data = raw
         else:
@@ -391,7 +418,7 @@ class Ch2ZipStream:
 
         if entry["method"] == 0:
             # Stored: seekable, so read precisely the window.
-            raw = self.rf.read_range(data_off + start_line * row, n_lines * row)
+            raw = self.rf.read_span(data_off + start_line * row, n_lines * row)
             self.inflated_bytes += len(raw)
         else:
             dec = zlib.decompressobj(-zlib.MAX_WBITS)
@@ -401,7 +428,7 @@ class Ch2ZipStream:
             chunk = INFLATE_CHUNK
             while remaining > 0 and len(out) < need_end:
                 take = min(chunk, remaining)
-                out += dec.decompress(self.rf.read_range(data_off + pos, take))
+                out += dec.decompress(self.rf.read_span(data_off + pos, take))
                 pos += take
                 remaining -= take
                 if dec.eof:
