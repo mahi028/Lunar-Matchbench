@@ -70,16 +70,30 @@ Lunar-Matchbench/
 │       │   ├── app.py             # FastAPI backend with async job runner
 │       │   ├── models.py          # Pydantic request/response schemas
 │       │   ├── templates/
-│       │   │   └── index.html     # Interactive Web UI
+│       │   │   └── index.html     # Mission-control console markup
 │       │   └── static/
-│       │       ├── app.js         # Frontend controller and polling
-│       │       └── style.css      # Dark-themed dashboard UI styling
+│       │       ├── css/
+│       │       │   ├── tokens.css     # Palette, type scale, focus, reduced motion
+│       │       │   ├── console.css    # Status bar, rail, panels, responsive
+│       │       │   └── panels.css     # Comparator, overlay, charts, diagnosis
+│       │       └── js/
+│       │           ├── api.js         # Every network call the console makes
+│       │           ├── locator.js     # Scan-line strip locator
+│       │           ├── comparator.js  # Swipe / fade between the two patches
+│       │           ├── tiepoints.js   # Canvas correspondence overlay
+│       │           ├── charts.js      # Residuals, verification, coverage
+│       │           └── main.js        # Run lifecycle and panel wiring
+│       ├── core/
+│       │   └── streaming.py       # Byte-range reader, PDS3 + remote-ZIP readers
 │       └── utils/
 │           ├── geo.py             # Spherical Moon geometry, BBox, IoU
 │           └── image.py           # CLAHE, percentiles, checkerboard, anaglyph
 ├── tests/
 │   ├── test_core.py               # Unit tests for image processing & geo utils
-│   └── test_api.py                # FastAPI endpoint integration tests
+│   ├── test_api.py                # FastAPI endpoint integration tests
+│   ├── test_streaming.py          # Byte-range, remote ZIP, resume integrity
+│   ├── test_ui.py                 # Console checks (headless browser, offline)
+│   └── test_live.py               # Opt-in checks against the live archives
 ├── outputs/
 │   ├── posters/                   # Generated 6-panel verification posters
 │   └── overlap/                   # Geographic footprint overlap maps
