@@ -22,7 +22,22 @@ def test_status_not_found():
     assert response.status_code == 404
 
 
-def test_post_registration_job():
+def test_post_registration_job(monkeypatch):
+    """Enqueueing a job must not perform a real ISSDC/NASA fetch.
+
+    FastAPI's TestClient runs BackgroundTasks inline once the response is
+    returned, so without this stub the test logs into ISSDC for real and starts
+    downloading a multi-hundred-megabyte product -- which is exactly what
+    happened once a working .env appeared. The endpoint contract is what is
+    under test here; the pipeline itself is covered elsewhere.
+    """
+    import lunar_matchbench.core.pipeline as pipeline_mod
+
+    def _stub(*args, **kwargs):
+        return {"status": "FAILED", "reason": "stubbed out in tests", "step_images": {}}
+
+    monkeypatch.setattr(pipeline_mod, "run_pipeline", _stub)
+
     payload = {
         "lat": 15.0,
         "lon": 289.2,

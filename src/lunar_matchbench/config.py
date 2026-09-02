@@ -32,9 +32,13 @@ POSTER_DIR   = OUTPUT_ROOT / "posters"
 OVERLAP_DIR  = OUTPUT_ROOT / "overlap"
 JOB_DIR      = OUTPUT_ROOT / "jobs"
 
+# HTTP byte-range cache. Keyed by (url, offset, length), so a re-run of the
+# same coordinate serves from disk instead of re-fetching.
+CACHE_DIR    = DATA_ROOT / "cache"
+
 def ensure_dirs() -> None:
     """Create all required directories if absent."""
-    for d in [CH2_DATA_DIR, LROC_DATA_DIR, POSTER_DIR, OVERLAP_DIR, JOB_DIR]:
+    for d in [CH2_DATA_DIR, LROC_DATA_DIR, POSTER_DIR, OVERLAP_DIR, JOB_DIR, CACHE_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 # ── Instrument constants ──────────────────────────────────────────────────────
@@ -81,3 +85,13 @@ LROC_SCAN_RANGE = 10000         # ± lines around geometry estimate
 # ── HTTP download ─────────────────────────────────────────────────────────────
 DOWNLOAD_CHUNK  = 4 * 1024 * 1024   # 4 MB
 HTTP_TIMEOUT    = 60                 # seconds
+
+# ── Range streaming ──────────────────────────────────────────────────────────
+# Measured against pds.lroc.im-ldi.com on 2026-09-02: the host honours single
+# byte-ranges (206, accurate Content-Range) but silently IGNORES comma-separated
+# multi-ranges -- a 3 KB multi-range request came back 200 with all 529 MB.
+# Never batch ranges; issue one contiguous interval per request.
+RANGE_CHUNK_MAX     = 64 * 1024 * 1024   # refuse absurd single reads
+LROC_SEARCH_MARGIN  = 0.5                # extra window height, as a fraction of raw_win
+MAX_LROC_WINDOWS    = 3                  # hard cap on windows fetched per product
+INFLATE_BUDGET      = 600 * 1024 * 1024  # max compressed bytes to stream-inflate
