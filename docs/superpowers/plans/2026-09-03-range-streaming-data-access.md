@@ -2138,3 +2138,22 @@ real defect rather than a plan detail:
 Spec §3.4 (the interactive mission-control UI) is Plan 2. This plan leaves
 `index.html`, `style.css` and `app.js` untouched; every new API field is
 optional, so the existing UI keeps working unchanged.
+
+### Post-execution defects found by the first live run
+
+8. **A truncated local product poisoned every later run.** A killed download
+   left `M1359306139LC.IMG` at 201,326,592 bytes of its real 528,929,736 under
+   the true product name. `open_lroc_reader` accepted it because it was
+   non-empty; reads past its end returned zero lines; the run reported "no
+   usable LROC patch". The coordinate the README documents succeeding with 872
+   inliers therefore failed for reasons that looked like science.
+   `LocalLrocReader.is_complete` now compares the file against the size its own
+   PDS3 label declares, and `_http_download` stages through `.part`.
+9. **A single run could transfer ~1.1 GB.** Three LROC windows (77-130 MB each)
+   across three candidates, plus the CH2 inflate. `TransferBudget` imposes one
+   shared ceiling per run and fails with a clear reason. Cached reads are never
+   charged so pre-warming cannot exhaust it.
+
+Also verified: the streamed CH2 patch is **byte-identical** to the same patch
+read from a complete local archive (same scan/pixel 91700/1900, identical
+pixels, 1500 SIFT keypoints each). Streaming is not a lossy shortcut.
