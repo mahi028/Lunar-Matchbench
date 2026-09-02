@@ -69,11 +69,12 @@
 .tp-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
 .tp-legend { display: flex; align-items: center; gap: 14px; font-size: 11.5px; }
 .tp-key { display: inline-flex; align-items: center; gap: 6px; }
-.tp-key::before { content: ""; width: 8px; height: 8px; border-radius: 50%; }
+/* The legend marks mirror the canvas: kept is a solid disc, rejected a ring. */
+.tp-key::before { content: ""; width: 9px; height: 9px; border-radius: 50%; flex: none; }
 .tp-key--in { color: var(--good); }
 .tp-key--in::before { background: var(--good); }
 .tp-key--out { color: var(--bad); }
-.tp-key--out::before { background: var(--bad); }
+.tp-key--out::before { border: 1.5px solid var(--bad); }
 .tp-total { color: var(--muted); }
 .tp-filters { margin-left: auto; display: flex; gap: 6px; }
 .tp-frame {
@@ -105,3 +106,26 @@
 .stage-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; align-items: start; }
 .stage-media > div { min-width: 0; }
 .stage-media .tp { margin-top: 0; }
+
+/* ── evidence charts ─────────────────────────────────────────────────── */
+#charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 24px; margin-top: 22px; }
+.chart { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.chart svg { display: block; overflow: visible; }
+.empty { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+
+.chart-legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
+.lg { display: inline-flex; align-items: center; gap: 6px; }
+.lg-mark { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.lg-mark--disc { background: var(--c); }
+.lg-mark--ring { border: 1.5px solid var(--c); }
+
+/* Part-to-whole of one population, not a funnel: there is no sequence here. */
+.prop-track { height: 12px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 2px; overflow: hidden; }
+.prop-kept { display: block; height: 100%; background: var(--good); }
+.prop-labels { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; }
+.prop-kept-label { color: var(--good); }
+.prop-total-label { color: var(--muted); }
+
+.chart-grid { display: grid; grid-template-columns: repeat(var(--cells, 8), 1fr); gap: 3px; max-width: 240px; }
+.grid-cell { aspect-ratio: 1; border-radius: 1px; background: var(--panel-2); border: 1px solid var(--rule); }
+.grid-cell[data-on] { background: var(--good); border-color: var(--good); }

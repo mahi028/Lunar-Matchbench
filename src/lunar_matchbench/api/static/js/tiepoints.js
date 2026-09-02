@@ -8,7 +8,8 @@
 //
 // Colour here is the inlier verdict, not mission provenance: both endpoints of
 // every line belong to both missions at once, so the only thing a colour can
-// honestly encode is whether MAGSAC++ kept the correspondence.
+// honestly encode is whether MAGSAC++ kept the correspondence. That verdict is
+// also carried by shape, because green-vs-red is the classic colour-vision trap.
 
 const KEPT = "#3FD68C";      // --good
 const REJECTED = "#FF5C5C";  // --bad
@@ -81,11 +82,22 @@ export function mountTiePoints(container, { tiepoints, patchSize, jobId }) {
         ctx.stroke();
       }
 
+      // Shape, not just colour. The kept/rejected pair is green vs red, which
+      // the palette validator puts at deutan dE 8.5 -- above the >=8 target but
+      // only just -- so the verdict is also carried by fill: kept is a solid
+      // disc, rejected is a hollow ring.
       ctx.globalAlpha = 1;
-      ctx.fillStyle = colour;
+      const r = hot ? 6 : 3.2;
       ctx.beginPath();
-      ctx.arc(x, y, hot ? 6 : 3, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      if (mask[i]) {
+        ctx.fillStyle = colour;
+        ctx.fill();
+      } else {
+        ctx.strokeStyle = colour;
+        ctx.lineWidth = hot ? 2.4 : 1.4;
+        ctx.stroke();
+      }
     }
   }
 

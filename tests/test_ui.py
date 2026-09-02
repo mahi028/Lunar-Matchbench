@@ -175,3 +175,38 @@ def test_tiepoint_hover_reads_out_a_residual(page, live_server):
                     box["y"] + box["height"] * (120 / 1024))
     page.wait_for_timeout(300)
     assert "px" in page.inner_text(".tp-readout")
+
+
+def test_charts_render_from_real_metrics(page, live_server):
+    _seed("uitest07", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest07", wait_until="networkidle")
+    page.wait_for_selector(".chart-histogram", timeout=15000)
+
+    # Bars are paths, not rects: the far end is rounded and the baseline end
+    # square, which a rect cannot express.
+    assert page.locator(".chart-histogram .bar").count() >= 1
+    # 8x8 uniformity grid, matching GRID_CELLS in config.py
+    assert page.locator(".chart-grid .grid-cell").count() == 64
+
+    prop = page.inner_text(".prop-labels")
+    assert "1,280" in prop and "523" in prop, prop
+
+
+def test_charts_encode_the_verdict_by_shape_not_only_colour(page, live_server):
+    """Green vs red sits at deutan dE 8.5, so shape has to carry it too."""
+    _seed("uitest07b", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest07b", wait_until="networkidle")
+    page.wait_for_selector(".chart-legend", timeout=15000)
+    assert page.locator(".lg-mark--disc").count() >= 1
+    assert page.locator(".lg-mark--ring").count() >= 1
+
+
+def test_charts_are_absent_without_tiepoints(page, live_server):
+    """No data must render as an empty state, never as an invented chart."""
+    bare = copy.deepcopy(DONE_JOB)
+    bare["result"]["register_result"] = {}
+    _seed("uitest08", bare)
+    page.goto(f"{live_server}/?job=uitest08", wait_until="networkidle")
+    page.wait_for_selector("#charts", timeout=15000)
+    assert page.locator(".chart-histogram").count() == 0
+    assert "No correspondence data" in page.inner_text("#charts")

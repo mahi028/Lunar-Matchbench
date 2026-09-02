@@ -2,6 +2,7 @@ import { fetchResult } from "./api.js";
 import { clearLocator, renderLocator } from "./locator.js";
 import { mountComparator } from "./comparator.js";
 import { mountTiePoints } from "./tiepoints.js";
+import { renderCharts } from "./charts.js";
 
 const locator = document.getElementById("locator");
 const stage = document.getElementById("stage");
@@ -56,6 +57,10 @@ if (jobFromUrl) {
     .then((data) => {
       renderLocator(locator, data?.provenance?.lroc_localization);
       renderStage(jobFromUrl, data);
+      document.getElementById("panels").hidden = false;
+      renderCharts(document.getElementById("charts"), data);
+      document.getElementById("prov-pre").textContent =
+        JSON.stringify(data.provenance || {}, null, 2);
     })
     .catch(() => clearLocator(locator));
 }
