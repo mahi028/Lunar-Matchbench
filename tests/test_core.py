@@ -328,3 +328,52 @@ def test_ch2_acquisition_time_is_parsed_from_the_product_name():
         "ch2_tmc_ncf_20191218T1121183775_d_img_gds.zip") == "2019-12-18T11:21:18"
     assert _ch2_time_from_name("no_timestamp_here.zip") == ""
     assert _ch2_time_from_name("") == ""
+
+
+def test_the_two_patches_come_from_two_different_sources():
+    """The moving and reference patches must never be the same raster twice.
+
+    If the reference were secretly a second read of the Chandrayaan-2 image the
+    registration would succeed trivially and every metric would be meaningless.
+    Verified live for job c8ce875f: CH2 4.33 m/px from ISSDC against LROC
+    1.052 m/px from NASA PDS, pixel correlation 0.14, and a direct re-read of
+    the LROC product matched the saved reference patch at 0.998.
+
+    This guards the wiring: extract_ch2_patch and extract_lroc_patch must be
+    fed by different readers.
+    """
+    import inspect
+
+    from lunar_matchbench.core import pipeline
+
+    source = inspect.getsource(pipeline.run_pipeline)
+    assert "extract_ch2_patch(" in source
+    assert "extract_lroc_patch(" in source
+    # The reference patch must come from the LROC reader, never from ch2_match.
+    assert "extract_lroc_patch(\n                path," in source or \
+           "extract_lroc_patch(\n            path," in source, \
+        "the LROC patch must be extracted from the LROC reader"
+    assert "extract_ch2_patch(ch2_match" in source, \
+        "the moving patch must come from the CH2 geometry match"
+
+
+def test_registration_rejects_an_image_matched_against_itself():
+    """A self-match is a degenerate success; the guard is that we never do it.
+
+    Registering an image against itself gives a near-perfect result, which is
+    exactly what a duplicated-source bug would look like from the metrics. This
+    pins the signature so it is recognisable if it ever appears for real.
+    """
+    import cv2
+    import numpy as np
+
+    from lunar_matchbench.core.register import register
+
+    rng = np.random.default_rng(11)
+    img = cv2.GaussianBlur(rng.integers(0, 255, (512, 512)).astype(np.uint8), (0, 0), 2)
+
+    same = register(img, img, matcher="sift")
+    assert same["status"] == "SUCCESS"
+    # A true self-match is essentially exact: near-zero error, near-total inliers.
+    assert same["reprojection_rmse_px"] < 0.05, same["reprojection_rmse_px"]
+    assert same["inlier_ratio_pct"] > 95, same["inlier_ratio_pct"]

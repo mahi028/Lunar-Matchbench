@@ -9,7 +9,7 @@
 // saffron, one is LRO in --nasa blue, the same two colours that mark every
 // pixel's provenance everywhere else in the interface.
 
-const STAR_COUNT = 190;
+const STAR_COUNT = 900;
 const TAU = Math.PI * 2;
 
 function prefersReducedMotion() {
@@ -66,12 +66,28 @@ export function mountSky(canvas) {
   const rand = seeded(20260903);
   const reduced = prefersReducedMotion();
 
-  const stars = Array.from({ length: STAR_COUNT }, () => ({
-    x: rand(), y: rand(),
-    r: 0.4 + rand() * 1.25,
-    phase: rand() * TAU,
-    speed: 0.4 + rand() * 1.5,
-    drift: 0.002 + rand() * 0.01,
+  // A real star field is mostly faint with a few bright ones, not a uniform
+  // scatter -- so brightness is skewed and only the top few percent get colour
+  // and diffraction spikes. Colours are the actual stellar range: cool blue-white
+  // through to warm orange.
+  const STAR_TINTS = ["#FFFFFF", "#DCE6FF", "#BFD4FF", "#FFF0D6", "#FFD9B0"];
+  const stars = Array.from({ length: STAR_COUNT }, () => {
+    const brightness = Math.pow(rand(), 2.4);      // few bright, many faint
+    return {
+      x: rand(), y: rand(),
+      r: 0.35 + brightness * 1.9,
+      mag: 0.25 + brightness * 0.95,
+      tint: STAR_TINTS[Math.floor(Math.pow(rand(), 2) * STAR_TINTS.length)],
+      phase: rand() * TAU,
+      speed: 0.6 + rand() * 2.6,
+      depth: 0.3 + rand() * 0.7,                   // parallax layer
+      spike: brightness > 0.86,
+    };
+  });
+
+  // A faint band of unresolved stars, the way the Milky Way reads to the eye.
+  const dust = Array.from({ length: 26 }, () => ({
+    x: rand(), y: rand() * 0.55, r: 0.10 + rand() * 0.26, a: 0.012 + rand() * 0.022,
   }));
 
   // The two spacecraft this tool is about, on different orbital planes and
@@ -165,16 +181,56 @@ export function mountSky(canvas) {
     ctx.restore();
   }
 
+  function drawDust() {
+    // Broad, very low-alpha clouds. Deep space is not an empty black rectangle.
+    for (const d of dust) {
+      const cx = d.x * w;
+      const cy = d.y * h;
+      const rad = d.r * Math.max(w, h);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
+      g.addColorStop(0, `rgba(150,175,225,${d.a})`);
+      g.addColorStop(1, "rgba(150,175,225,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+    }
+  }
+
   function drawStars(t) {
     for (const s of stars) {
-      const x = ((s.x + t * s.drift * 0.01) % 1) * w;
+      // Parallax: nearer stars drift faster, which gives the field depth.
+      const x = ((s.x + t * 0.0012 * s.depth) % 1) * w;
       const y = s.y * h;
-      const twinkle = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(t * s.speed + s.phase));
-      ctx.globalAlpha = 0.30 * twinkle;
+      // Sharper than a plain sine, so bright stars visibly flare rather than
+      // breathing uniformly.
+      const osc = 0.5 + 0.5 * Math.sin(t * s.speed + s.phase);
+      const twinkle = 0.30 + 0.70 * Math.pow(osc, 2.2);
+      const alpha = Math.min(1, s.mag * twinkle);
+
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = s.tint;
       ctx.beginPath();
       ctx.arc(x, y, s.r, 0, TAU);
-      ctx.fillStyle = "#E8EDF2";
       ctx.fill();
+
+      if (s.spike) {
+        // A soft halo and a cross, the way a bright point source reads through
+        // an optic. Only the brightest few percent get it.
+        const halo = ctx.createRadialGradient(x, y, 0, x, y, s.r * 7);
+        halo.addColorStop(0, s.tint);
+        halo.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.globalAlpha = alpha * 0.22;
+        ctx.fillStyle = halo;
+        ctx.fillRect(x - s.r * 7, y - s.r * 7, s.r * 14, s.r * 14);
+
+        ctx.globalAlpha = alpha * 0.5;
+        ctx.strokeStyle = s.tint;
+        ctx.lineWidth = 0.7;
+        const len = s.r * 5.5;
+        ctx.beginPath();
+        ctx.moveTo(x - len, y); ctx.lineTo(x + len, y);
+        ctx.moveTo(x, y - len); ctx.lineTo(x, y + len);
+        ctx.stroke();
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -224,6 +280,7 @@ export function mountSky(canvas) {
   function frame(ms) {
     const t = ms / 1000;
     ctx.clearRect(0, 0, w, h);
+    drawDust();
     drawStars(t);
     drawMoon(t);
     drawSats(t);
@@ -235,6 +292,7 @@ export function mountSky(canvas) {
     if (reduced) {
       // Still a sky, just not a moving one.
       ctx.clearRect(0, 0, w, h);
+      drawDust();
       drawStars(0);
       drawMoon(0);
       drawSats(0);

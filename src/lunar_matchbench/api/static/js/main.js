@@ -4,6 +4,7 @@ import { mountComparator } from "./comparator.js";
 import { mountTiePoints } from "./tiepoints.js";
 import { renderCharts } from "./charts.js";
 import { renderContext } from "./context.js";
+import { renderTransform } from "./transform.js";
 import { mountSky } from "./sky.js";
 
 const STEPS = [
@@ -179,6 +180,7 @@ function renderResult(jobId, data) {
   renderDiagnosis(document.getElementById("diagnosis"), data);
   renderMetrics(document.getElementById("metrics"), data);
   renderCharts(document.getElementById("charts"), data);
+  renderTransform(document.getElementById("transform"), data);
   renderContext(document.getElementById("context"), data);
   document.getElementById("prov-pre").textContent =
     JSON.stringify(data.provenance || {}, null, 2);

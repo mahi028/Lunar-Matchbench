@@ -262,3 +262,26 @@ def test_cache_served_run_is_not_shown_as_a_live_fetch(page, live_server):
     # inner_text returns rendered text, and the label is uppercased by CSS.
     assert "served from cache" in page.inner_text("#diagnosis").lower()
     assert page.locator("#status-chip").get_attribute("data-state") == "cache"
+
+
+def test_transform_panel_decomposes_the_homography(page, live_server):
+    """Nine raw matrix numbers tell a reader nothing; the motions do."""
+    _seed("uitest13", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest13", wait_until="networkidle")
+    page.wait_for_selector(".chart-transform", timeout=15000)
+
+    text = page.inner_text(".chart-transform")
+    for label in ("Shift", "Rotation", "Scale", "Shear", "Perspective"):
+        assert label in text, f"missing {label}"
+    # DONE_JOB's homography is a pure 4,-2 translation.
+    assert "4.5 px" in text or "4.5" in text, text
+    assert page.locator(".chart-transform .tf-grid polyline").count() >= 12
+
+
+def test_transform_panel_is_absent_without_a_homography(page, live_server):
+    failed = _failed_job(confident=False, best_n=0)
+    failed["result"]["register_result"].pop("homography", None)
+    _seed("uitest14", failed)
+    page.goto(f"{live_server}/?job=uitest14", wait_until="networkidle")
+    page.wait_for_selector("#panels:not([hidden])", timeout=15000)
+    assert page.locator(".chart-transform").count() == 0
