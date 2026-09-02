@@ -163,3 +163,40 @@ def test_extract_lroc_patch_finds_a_planted_match():
     assert patch.shape == (1024, 1024)
     assert info["confident"] is True, f"expected a confident lock, got best_n={info['best_n']}"
     assert abs(info["used_center_line"] - 4512) < 1200
+
+
+def _shifted_pair():
+    """A blurred-noise image and a translated copy: an easy, honest match."""
+    import cv2
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    moving = cv2.GaussianBlur(
+        rng.integers(0, 255, (512, 512)).astype(np.uint8), (0, 0), 2)
+    M = np.float32([[1, 0, 12], [0, 1, -7]])
+    reference = cv2.warpAffine(moving, M, (512, 512))
+    return moving, reference
+
+
+def test_register_returns_residual_per_raw_match():
+    """The UI histogram needs the full distribution, not just the inliers."""
+    from lunar_matchbench.core.register import register
+
+    result = register(*_shifted_pair(), matcher="sift")
+    assert result["status"] == "SUCCESS", result.get("reason")
+    assert "residuals_px" in result
+    assert len(result["residuals_px"]) == len(result["mkpts_moving"])
+    assert all(r >= 0 for r in result["residuals_px"])
+
+
+def test_reported_rmse_matches_inlier_residuals():
+    """RMSE must be the inlier subset of the same residuals the UI plots."""
+    import numpy as np
+
+    from lunar_matchbench.core.register import register
+
+    result = register(*_shifted_pair(), matcher="sift")
+    resid = np.array(result["residuals_px"])
+    mask = np.array(result["inlier_mask"], dtype=bool)
+    expected = float(np.sqrt(np.mean(resid[mask] ** 2)))
+    assert abs(expected - result["reprojection_rmse_px"]) < 1e-2
