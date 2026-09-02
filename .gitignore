@@ -13,3 +13,8 @@ outputs/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Prototype/exploration scripts -- superseded by the src/lunar_matchbench
+# package, not imported by it, and one file in here carries a hardcoded
+# session credential that must never be committed.
+src_prot/
