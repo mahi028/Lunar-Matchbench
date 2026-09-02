@@ -28,7 +28,24 @@
   4. Runs a coarse-to-fine descriptor scan to resolve ephemeris/cross-track offsets.
   5. Performs sub-pixel cross-mission registration using **XFeat (CVPR 2024)** + MAGSAC++ homography.
   6. Generates 6-panel verification posters, geographic footprint overlap maps, and SHA-256 sensor provenance.
-- **FastAPI Web UI**: Interactive dashboard with real-time pipeline step tracker, quick presets, metrics bar, and interactive comparison tabs.
+- **Mission-control console**: A dark FastAPI web console where the result is
+  explorable rather than asserted:
+  - a **scan-line strip locator** drawing the whole LROC strip to scale, with the
+    pushbroom geometry estimate, the span actually searched, and the achieved
+    lock on it — so a 2,105-line drift, or a strip searched end to end with no
+    match, is visible at a glance;
+  - a **swipe/fade comparator** between the registered CH2 patch and the LROC
+    reference, keyboard-operable;
+  - a **tie-point overlay** drawn from the pipeline's own correspondence arrays
+    over the CH2 patch — hover any point for its reprojection error, filter to
+    kept or rejected, toggle the flow field;
+  - **evidence charts** computed from real output: a residual histogram against
+    the RANSAC threshold, the verification proportion, and the 8×8 spatial
+    coverage grid.
+
+  Colour encodes mission provenance throughout — saffron is always
+  Chandrayaan-2, blue is always LROC NAC. The kept/rejected verdict is carried
+  by shape as well as colour, because that pair sits at deutan ΔE 8.5.
 - **Reproducible Environment**: Fully managed with `uv` and standard `pyproject.toml`.
 
 ---
