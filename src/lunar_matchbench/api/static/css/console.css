@@ -135,3 +135,56 @@
   .statusbar { flex-wrap: wrap; gap: 10px; }
   .chip { margin-left: 0; }
 }
+
+/* ── landing explainer ───────────────────────────────────────────────── */
+.panel-lede { color: var(--muted); font-size: 13px; line-height: 1.65; max-width: 82ch; margin-bottom: 18px; }
+.field .hint { font-size: 10.5px; color: var(--muted); opacity: .75; }
+
+.intro-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 22px; }
+.intro-grid h3 {
+  font-family: var(--display); font-weight: 600; font-stretch: 108%;
+  font-size: 13px; color: var(--signal); margin-bottom: 7px;
+}
+.intro-grid p { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+
+.glossary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px 24px; margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--rule);
+}
+.glossary > div { display: flex; flex-direction: column; gap: 4px; }
+.glossary dt { font-size: 12px; font-weight: 600; color: var(--nasa); }
+.glossary dd { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+/* ── strip probe ─────────────────────────────────────────────────────── */
+.rail-svg { touch-action: none; }
+.rail-probe { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule); }
+.rail-hint { font-size: 10.5px; color: var(--muted); line-height: 1.5; }
+.rail-preview {
+  display: block; width: 100%; margin-top: 8px; border-radius: 2px;
+  border: 1px solid var(--rule);
+}
+
+/* ── footer ──────────────────────────────────────────────────────────── */
+.siteftr { border-top: 1px solid var(--rule); margin-top: 40px; padding: 34px 20px 30px; }
+.ftr-inner {
+  max-width: 1440px; margin: 0 auto;
+  display: grid; grid-template-columns: 1.6fr repeat(3, 1fr); gap: 30px;
+}
+.ftr-brand b {
+  font-family: var(--display); font-weight: 700; font-stretch: 116%;
+  font-size: 14px; display: block; margin-bottom: 8px;
+}
+.ftr-brand p { font-size: 12px; color: var(--muted); line-height: 1.7; max-width: 46ch; }
+.ftr-brand strong { color: var(--signal); font-weight: 600; }
+.ftr-col { display: flex; flex-direction: column; gap: 7px; }
+.ftr-col a, .ftr-col span:not(.eyebrow) { font-size: 12px; color: var(--muted); text-decoration: none; }
+.ftr-col a:hover { color: var(--nasa); }
+.ftr-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; }
+.ftr-dot--isro { background: var(--isro); }
+.ftr-dot--nasa { background: var(--nasa); }
+.ftr-note {
+  max-width: 1440px; margin: 26px auto 0; padding-top: 18px;
+  border-top: 1px solid var(--rule); font-size: 10.5px; color: var(--muted); opacity: .8;
+}
+@media (max-width: 900px) { .ftr-inner { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 520px) { .ftr-inner { grid-template-columns: 1fr; } }

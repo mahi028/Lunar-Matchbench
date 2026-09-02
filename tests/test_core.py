@@ -314,3 +314,17 @@ def test_interleaving_survives_missing_identifiers():
 
     ranked = [{"pds_id": None, "start_time": ""}, {"pds_id": "nac.m1lc", "start_time": "t"}]
     assert len(interleave_by_acquisition(ranked)) == 2
+
+
+def test_ch2_acquisition_time_is_parsed_from_the_product_name():
+    """The gap between the two passes sets the sun-angle difference.
+
+    ISSDC encodes the timestamp in the filename and nowhere else the pipeline
+    already reads, so without this the UI can only report one of the two dates.
+    """
+    from lunar_matchbench.core.downloader import _ch2_time_from_name
+
+    assert _ch2_time_from_name(
+        "ch2_tmc_ncf_20191218T1121183775_d_img_gds.zip") == "2019-12-18T11:21:18"
+    assert _ch2_time_from_name("no_timestamp_here.zip") == ""
+    assert _ch2_time_from_name("") == ""

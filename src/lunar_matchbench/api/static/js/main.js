@@ -3,6 +3,8 @@ import { clearLocator, renderLocator } from "./locator.js";
 import { mountComparator } from "./comparator.js";
 import { mountTiePoints } from "./tiepoints.js";
 import { renderCharts } from "./charts.js";
+import { renderContext } from "./context.js";
+import { mountSky } from "./sky.js";
 
 const STEPS = [
   "Locate CH2 patch", "Query NASA ODE", "Open LROC NAC", "Extract patch",
@@ -19,6 +21,8 @@ const chipText = document.getElementById("status-text");
 const form = document.getElementById("run-form");
 const runBtn = document.getElementById("run-btn");
 
+const intro = document.getElementById("intro");
+mountSky(document.getElementById("sky"));
 clearLocator(locator);
 
 function setChip(state, label) {
@@ -135,7 +139,8 @@ function renderResult(jobId, data) {
     ok ? (fromCache ? "Succeeded · from cache" : "Succeeded · live") : "Did not converge",
   );
 
-  renderLocator(locator, data?.provenance?.lroc_localization);
+  renderLocator(locator, data?.provenance?.lroc_localization, { jobId });
+  if (intro) intro.hidden = true;
 
   stage.hidden = false;
   stageBody.innerHTML = "";
@@ -174,6 +179,7 @@ function renderResult(jobId, data) {
   renderDiagnosis(document.getElementById("diagnosis"), data);
   renderMetrics(document.getElementById("metrics"), data);
   renderCharts(document.getElementById("charts"), data);
+  renderContext(document.getElementById("context"), data);
   document.getElementById("prov-pre").textContent =
     JSON.stringify(data.provenance || {}, null, 2);
 }
@@ -204,6 +210,7 @@ form.addEventListener("submit", async (e) => {
   runBtn.disabled = true;
   runBtn.textContent = "Running";
   panels.hidden = true;
+  if (intro) intro.hidden = true;
   clearLocator(locator);
   setChip("running", "Starting");
   try {

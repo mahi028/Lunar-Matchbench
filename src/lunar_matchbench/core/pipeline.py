@@ -273,6 +273,8 @@ def run_pipeline(
         "ch2_scan_line": ch2_match["scan"],
         "ch2_pixel_col": ch2_match["pixel"],
         "ch2_gsd_m": ch2_gsd,
+        "ch2_product": ch2_match.get("product", ""),
+        "ch2_start_time": ch2_match.get("start_time", ""),
         "lroc_product_id": best["pds_id"],
         "lroc_filename": best["filename"],
         "lroc_gsd_m": lroc_gsd,

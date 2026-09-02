@@ -82,3 +82,13 @@ body {
     transition-duration: .001ms !important;
   }
 }
+
+/* The ambient sky sits behind everything and never intercepts a pointer. */
+#sky {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  z-index: 0; pointer-events: none;
+}
+.statusbar, .console, .siteftr { position: relative; z-index: 1; }
+/* Panels are translucent so the sky reads behind them without washing out
+   the imagery they contain. */
+.panel, .rail { background: color-mix(in srgb, var(--panel) 88%, transparent); backdrop-filter: blur(6px); }

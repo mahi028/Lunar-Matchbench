@@ -7,11 +7,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400;62..125,600;62..125,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=1" />
-  <link rel="stylesheet" href="/static/css/console.css?v=1" />
-  <link rel="stylesheet" href="/static/css/panels.css?v=1" />
+  <link rel="stylesheet" href="/static/css/tokens.css?v=2" />
+  <link rel="stylesheet" href="/static/css/console.css?v=2" />
+  <link rel="stylesheet" href="/static/css/panels.css?v=2" />
 </head>
 <body>
+  <canvas id="sky" aria-hidden="true"></canvas>
+
   <header class="statusbar">
     <div class="wordmark">
       <b>Lunar&#8209;MatchBench</b>
@@ -35,15 +37,23 @@
           <span class="eyebrow">Target</span>
           <h2>Where on the Moon</h2>
         </header>
+        <p class="panel-lede">
+          Enter any lunar coordinate. The engine finds the Chandrayaan-2 image that
+          covers it, finds a NASA LROC NAC image of the same ground, and measures how
+          precisely the two line up &mdash; streaming only the bytes it needs from
+          each archive.
+        </p>
         <form id="run-form">
           <div class="field-grid">
             <div class="field">
               <label for="lat">Latitude &deg;N</label>
               <input type="number" id="lat" step="any" min="-90" max="90" value="15.0" required />
+              <span class="hint">&minus;90 to +90, planetocentric</span>
             </div>
             <div class="field">
               <label for="lon">Longitude &deg;E</label>
               <input type="number" id="lon" step="any" min="0" max="360" value="289.2" required />
+              <span class="hint">0 to 360 east</span>
             </div>
             <div class="field">
               <label for="instrument">CH2 instrument</label>
@@ -51,6 +61,7 @@
                 <option value="tmc" selected>TMC-2 &mdash; 5 m/px</option>
                 <option value="ohrc">OHRC &mdash; 0.25 m/px</option>
               </select>
+              <span class="hint">Which camera to register</span>
             </div>
             <div class="field">
               <label for="matcher">Matcher</label>
@@ -58,19 +69,70 @@
                 <option value="xfeat" selected>XFeat</option>
                 <option value="sift">SIFT</option>
               </select>
+              <span class="hint">Learned, or classical baseline</span>
             </div>
           </div>
           <div class="form-actions">
-          <div class="presets">
-            <span class="eyebrow">Presets</span>
-            <button type="button" class="preset" data-lat="15.0" data-lon="289.2">Oceanus Procellarum</button>
-            <button type="button" class="preset" data-lat="10.2" data-lon="289.5">Sinus Aestuum</button>
-            <button type="button" class="preset" data-lat="5.17879877" data-lon="288.954173">Rayed crater 5.2&deg;N</button>
-            <button type="button" class="preset" data-lat="3.613415864967716" data-lon="289.12239203822105">Known failure 3.6&deg;N</button>
-          </div>
-          <button type="submit" class="run" id="run-btn">Run registration</button>
+            <div class="presets">
+              <span class="eyebrow">Try</span>
+              <button type="button" class="preset" data-lat="15.0" data-lon="289.2">Oceanus Procellarum</button>
+              <button type="button" class="preset" data-lat="10.2" data-lon="289.5">Sinus Aestuum</button>
+              <button type="button" class="preset" data-lat="5.17879877" data-lon="288.954173">Rayed crater 5.2&deg;N</button>
+              <button type="button" class="preset" data-lat="3.613415864967716" data-lon="289.12239203822105">Known failure 3.6&deg;N</button>
+            </div>
+            <button type="submit" class="run" id="run-btn">Run registration</button>
           </div>
         </form>
+      </section>
+
+      <!-- Shown until the first run, so the console explains itself instead of
+           presenting empty panels. -->
+      <section class="panel intro" id="intro">
+        <header>
+          <span class="eyebrow">How to read this</span>
+          <h2>What the console shows you</h2>
+        </header>
+        <div class="intro-grid">
+          <article>
+            <h3>1 &middot; Find the same ground twice</h3>
+            <p>
+              Chandrayaan-2 and NASA's LRO both photographed the whole Moon, years apart,
+              at different resolutions and sun angles. The engine locates your coordinate
+              in each mission's imagery independently.
+            </p>
+          </article>
+          <article>
+            <h3>2 &middot; Lock onto the right scan line</h3>
+            <p>
+              Both cameras are pushbroom scanners: an LROC image is tens of thousands of
+              single lines. The rail on the left shows which line was chosen, how far it
+              drifted from the orbital-geometry estimate, and how much of the strip was
+              searched. Drag it to look anywhere in the product.
+            </p>
+          </article>
+          <article>
+            <h3>3 &middot; Match, then throw out the bad matches</h3>
+            <p>
+              Thousands of candidate correspondences are proposed, then MAGSAC++ keeps
+              only those that agree on one consistent transform. Kept points are solid
+              discs, rejected ones hollow rings.
+            </p>
+          </article>
+          <article>
+            <h3>4 &middot; Judge the result honestly</h3>
+            <p>
+              Every figure comes from the run itself. A failure says whether the whole
+              strip was searched &mdash; a real mismatch &mdash; or only part of it,
+              which proves nothing either way.
+            </p>
+          </article>
+        </div>
+        <dl class="glossary">
+          <div><dt>Inlier tie-points</dt><dd>Correspondences that survived geometric verification. More is better; these are what the alignment rests on.</dd></div>
+          <div><dt>Reprojection RMSE</dt><dd>Average pixel error when a kept point is pushed through the fitted transform. Below about 2 px is a good cross-mission result.</dd></div>
+          <div><dt>Spatial coverage</dt><dd>How much of the patch has tie-points in it. High coverage means the alignment holds across the whole frame, not just one crater.</dd></div>
+          <div><dt>Scan-line lock</dt><dd>Whether the reference position was confirmed visually or is only the orbital-geometry estimate. An unverified lock makes any failure inconclusive.</dd></div>
+        </dl>
       </section>
 
       <section class="panel" id="stage" hidden>
@@ -90,6 +152,7 @@
         <div id="diagnosis"></div>
         <div id="metrics"></div>
         <div id="charts"></div>
+        <div id="context"></div>
         <details class="prov">
           <summary>Provenance &amp; ephemeris</summary>
           <pre id="prov-pre" class="num"></pre>
@@ -98,6 +161,41 @@
     </div>
   </main>
 
-  <script type="module" src="/static/js/main.js?v=1"></script>
+  <footer class="siteftr">
+    <div class="ftr-inner">
+      <div class="ftr-brand">
+        <b>Lunar&#8209;MatchBench</b>
+        <p>
+          Cross-mission optical image registration for
+          <strong>SIH 2026 &middot; ISRO problem SIH26166</strong>.
+          Built by team Alibaba and 6 devs, IIT Madras BS Programme.
+        </p>
+      </div>
+      <div class="ftr-col">
+        <span class="eyebrow">Data sources</span>
+        <a href="https://chmapbrowse.issdc.gov.in/" target="_blank" rel="noopener">ISRO ISSDC / PRADAN</a>
+        <a href="https://oderest.rsl.wustl.edu/" target="_blank" rel="noopener">NASA ODE REST API</a>
+        <a href="https://pds.lroc.im-ldi.com/" target="_blank" rel="noopener">LROC PDS archive</a>
+      </div>
+      <div class="ftr-col">
+        <span class="eyebrow">Method</span>
+        <a href="https://github.com/verlab/accelerated_features" target="_blank" rel="noopener">XFeat &mdash; CVPR 2024</a>
+        <span>MAGSAC++ homography</span>
+        <span>HTTP byte-range streaming</span>
+      </div>
+      <div class="ftr-col">
+        <span class="eyebrow">Instruments</span>
+        <span><i class="ftr-dot ftr-dot--isro"></i>Chandrayaan-2 TMC-2 &middot; 5 m/px</span>
+        <span><i class="ftr-dot ftr-dot--isro"></i>Chandrayaan-2 OHRC &middot; 0.25 m/px</span>
+        <span><i class="ftr-dot ftr-dot--nasa"></i>LRO LROC NAC &middot; ~1 m/px</span>
+      </div>
+    </div>
+    <p class="ftr-note num">
+      Reference imagery courtesy NASA/GSFC/Arizona State University &middot;
+      Chandrayaan-2 data courtesy ISRO/ISSDC
+    </p>
+  </footer>
+
+  <script type="module" src="/static/js/main.js?v=2"></script>
 </body>
 </html>

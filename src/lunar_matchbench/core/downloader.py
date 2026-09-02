@@ -152,7 +152,23 @@ def find_ch2_geometry_match(lat: float, lon: float, instrument: str) -> dict | N
     # acquisition. Use the real value when available so patch footprint math
     # downstream reflects the product actually being read, not the spec sheet.
     best["gsd_m"] = _read_ch2_pixel_resolution(best["zip_path"]) or meta["gsd_m"]
+    best["product"] = best["zip_path"].name
+    best["start_time"] = _ch2_time_from_name(best["product"])
     return best
+
+
+def _ch2_time_from_name(name: str) -> str:
+    """Pull the acquisition timestamp out of a CH2 product name.
+
+    ISSDC encodes it as ..._20191218T1121183775_..., and it is the other half of
+    the time separation between the two passes -- which is what sets the sun
+    angle difference this whole problem statement is about.
+    """
+    m = re.search(r"_(20\d{2})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})", name or "")
+    if not m:
+        return ""
+    y, mo, dd, hh, mi, ss = m.groups()
+    return f"{y}-{mo}-{dd}T{hh}:{mi}:{ss}"
 
 
 def _read_ch2_pixel_resolution(zip_path: Path) -> float | None:
@@ -206,6 +222,9 @@ def find_ch2_geometry_match_streamed(zstream, lat: float, lon: float,
 
     # Prefer the product's own recorded resolution over the spec constant.
     best["gsd_m"] = meta["gsd_m"]
+    img_names = [n for n in zstream.namelist() if n.lower().endswith(".img")]
+    best["product"] = img_names[0].rsplit("/", 1)[-1] if img_names else ""
+    best["start_time"] = _ch2_time_from_name(best["product"])
     xml_names = [n for n in zstream.namelist() if n.lower().endswith(".xml")]
     if xml_names:
         xml = zstream.member_bytes(xml_names[0]).decode("utf-8", errors="replace")

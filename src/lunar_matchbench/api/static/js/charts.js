@@ -46,6 +46,15 @@ function figure(caption, className = "chart") {
   return fig;
 }
 
+/** A plain-language line saying what the reader should take from a chart. */
+function explain(fig, sentence) {
+  const p = document.createElement("p");
+  p.className = "chart-explain";
+  p.textContent = sentence;
+  fig.appendChild(p);
+  return fig;
+}
+
 function legend(items) {
   const wrap = document.createElement("div");
   wrap.className = "chart-legend";
@@ -173,7 +182,10 @@ function histogram(residuals, mask, threshold) {
     { label: "kept", colour: "var(--good)", shape: "disc" },
     { label: "rejected", colour: "var(--bad)", shape: "ring" },
   ]));
-  return fig;
+  return explain(fig,
+    `How far each match lands from where the fitted transform says it should. ` +
+    `Green sits left of the ${threshold} px threshold and was kept; red missed it. ` +
+    `A tall green cluster hard against zero means a tight, trustworthy alignment.`);
 }
 
 // ── verification proportion ─────────────────────────────────────────────────
@@ -198,7 +210,10 @@ function verification(metrics, tiepoints) {
       <span class="prop-total-label">${total.toLocaleString()} candidates</span>
     </div>`;
   fig.appendChild(bar);
-  return fig;
+  return explain(fig,
+    `Of every correspondence the matcher proposed, this is the share that agreed ` +
+    `on one consistent transform. A low share is not automatically bad -- what ` +
+    `matters is that enough survive, and that they spread across the frame.`);
 }
 
 // ── spatial coverage grid ───────────────────────────────────────────────────
@@ -238,7 +253,10 @@ function coverageGrid(tiepoints, patchSize, uniformity, cells) {
     { label: "has inliers", colour: "var(--good)", shape: "disc" },
     { label: "empty", colour: "var(--rule)", shape: "ring" },
   ]));
-  return fig;
+  return explain(fig,
+    `The patch split into a ${cells}x${cells} grid, with a cell lit where verified ` +
+    `matches landed and brighter where more landed. Matches bunched into a corner ` +
+    `can still give a low error while the alignment drifts elsewhere in the frame.`);
 }
 
 export function renderCharts(container, result, { gridCells = 8 } = {}) {
