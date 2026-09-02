@@ -285,3 +285,20 @@ def test_transform_panel_is_absent_without_a_homography(page, live_server):
     page.goto(f"{live_server}/?job=uitest14", wait_until="networkidle")
     page.wait_for_selector("#panels:not([hidden])", timeout=15000)
     assert page.locator(".chart-transform").count() == 0
+
+
+def test_transform_grid_stays_inside_its_box(page, live_server):
+    """A real fit shifts the frame hundreds of pixels; a fixed viewBox would
+    push the warped grid out over the table beside it."""
+    _seed("uitest15", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest15", wait_until="networkidle")
+    page.wait_for_selector(".tf-grid", timeout=15000)
+
+    svg = page.locator(".tf-grid").bounding_box()
+    for i in range(page.locator(".tf-grid polyline").count()):
+        b = page.locator(".tf-grid polyline").nth(i).bounding_box()
+        if b is None:
+            continue
+        assert b["x"] >= svg["x"] - 2 and b["y"] >= svg["y"] - 2, f"polyline {i} escapes left/top"
+        assert b["x"] + b["width"] <= svg["x"] + svg["width"] + 2, f"polyline {i} escapes right"
+        assert b["y"] + b["height"] <= svg["y"] + svg["height"] + 2, f"polyline {i} escapes bottom"

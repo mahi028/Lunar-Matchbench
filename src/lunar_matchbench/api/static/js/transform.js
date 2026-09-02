@@ -72,23 +72,42 @@ export function renderTransform(container, result) {
   fig.innerHTML = `<figcaption class="eyebrow">The transform that was fitted</figcaption>`;
 
   // ── the warped grid ───────────────────────────────────────────────────────
-  const VB = 240;
-  const svg = node("svg", { viewBox: `0 0 ${VB} ${VB}`, class: "tf-grid", width: "100%" });
+  // In patch pixels first; the viewBox is fitted afterwards. A real fit can
+  // shift the frame by hundreds of pixels, so a fixed viewBox would push the
+  // warped shape straight out of its box and over the table beside it.
   const project = (x, y) => {
     const w = H[2][0] * x + H[2][1] * y + H[2][2];
     return [
-      ((H[0][0] * x + H[0][1] * y + H[0][2]) / w) * (VB / size),
-      ((H[1][0] * x + H[1][1] * y + H[1][2]) / w) * (VB / size),
+      (H[0][0] * x + H[0][1] * y + H[0][2]) / w,
+      (H[1][0] * x + H[1][1] * y + H[1][2]) / w,
     ];
   };
 
   const N = 6;
   const step = size / N;
 
+  const corners = [[0, 0], [size, 0], [size, size], [0, size]].map(([x, y]) => project(x, y));
+  const xs = [0, size, ...corners.map((c) => c[0])];
+  const ys = [0, size, ...corners.map((c) => c[1])];
+  const pad = size * 0.08;
+  const minX = Math.min(...xs) - pad;
+  const minY = Math.min(...ys) - pad;
+  const spanX = Math.max(...xs) - minX + pad;
+  const spanY = Math.max(...ys) - minY + pad;
+  const span = Math.max(spanX, spanY);          // keep it square, no distortion
+
+  const svg = node("svg", {
+    viewBox: `${minX.toFixed(1)} ${minY.toFixed(1)} ${span.toFixed(1)} ${span.toFixed(1)}`,
+    class: "tf-grid", width: "100%",
+  });
+  const stroke = span / 260;                     // hairlines at any zoom
+
   // The original patch outline, for reference.
   svg.appendChild(node("rect", {
-    x: 0, y: 0, width: VB, height: VB,
-    fill: "none", stroke: "var(--rule)", "stroke-dasharray": "3 3",
+    x: 0, y: 0, width: size, height: size,
+    fill: "none", stroke: "var(--rule)",
+    "stroke-width": stroke * 1.2,
+    "stroke-dasharray": `${stroke * 5} ${stroke * 5}`,
   }));
 
   // The same square grid after the transform.
@@ -99,7 +118,7 @@ export function renderTransform(container, result) {
         const [x, y] = horizontal
           ? project(j * step, fixed * step)
           : project(fixed * step, j * step);
-        pts.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+        pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
       }
       return pts.join(" ");
     };
@@ -109,7 +128,7 @@ export function renderTransform(container, result) {
         points: along(i, horizontal),
         fill: "none",
         stroke: edge ? "var(--isro)" : "var(--nasa)",
-        "stroke-width": edge ? 1.6 : 0.8,
+        "stroke-width": edge ? stroke * 2 : stroke,
         opacity: edge ? 0.95 : 0.45,
       }));
     }
