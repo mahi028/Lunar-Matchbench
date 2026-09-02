@@ -46,6 +46,28 @@ class MetricsResult(BaseModel):
     elapsed_sec:         float
 
 
+class TiePoints(BaseModel):
+    """Raw correspondences, so the browser can draw them itself.
+
+    All four lists are the same length and index-aligned: entry i of `moving`
+    corresponds to entry i of `ref`, was kept or rejected per `inlier_mask[i]`,
+    and reprojects with `residuals_px[i]` error. Sent on failed runs too --
+    a failure is where inspecting the matches matters most.
+    """
+    moving:       list[list[float]]
+    ref:          list[list[float]]
+    inlier_mask:  list[bool]
+    residuals_px: list[float]
+
+
+class TransferStats(BaseModel):
+    """How many bytes the run actually moved, versus the product's full size."""
+    fetched_bytes: int = 0
+    cached_bytes:  int = 0
+    requests:      int = 0
+    product_bytes: int = 0
+
+
 class RegistrationResult(BaseModel):
     job_id:           str
     status:           JobStatus
@@ -57,4 +79,10 @@ class RegistrationResult(BaseModel):
     overlap_map_url:  Optional[str]           = None
     provenance:       Optional[dict]          = None
     error:            Optional[str]           = None
+    # Interactive-view payload: the browser composites and draws these itself
+    # rather than receiving a pre-rendered picture of the answer.
+    tiepoints:        Optional[TiePoints]     = None
+    homography:       Optional[list[list[float]]] = None
+    patch_size:       Optional[int]           = None
+    transfer:         Optional[TransferStats] = None
 

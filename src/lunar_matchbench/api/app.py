@@ -12,10 +12,11 @@ GET  /images/{filename}         → serves poster / overlap map PNGs
 """
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, HTMLResponse
@@ -24,8 +25,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from lunar_matchbench.api.models import (
     RegisterRequest, JobResponse, JobStatus, RegistrationResult, MetricsResult,
+    TiePoints, TransferStats,
 )
-from lunar_matchbench.config import POSTER_DIR, OVERLAP_DIR, ensure_dirs
+from lunar_matchbench.config import (
+    POSTER_DIR, OVERLAP_DIR, JOB_DIR, PATCH_SIZE, ensure_dirs,
+)
 
 ensure_dirs()
 
@@ -103,6 +107,42 @@ def _run_pipeline(job_id: str, req: RegisterRequest) -> None:
             })
     except Exception as exc:
         _store(job_id, {"status": JobStatus.failed, "error": str(exc)})
+    finally:
+        _persist(job_id)
+
+
+def _persist(job_id: str) -> None:
+    """Write a finished job to disk so a browser reload cannot lose it.
+
+    The in-memory store is fine for a single run, but losing a completed
+    registration to an accidental refresh mid-demo is not acceptable.
+    """
+    job = _read(job_id)
+    if job is None:
+        return
+    try:
+        JOB_DIR.mkdir(parents=True, exist_ok=True)
+        serialisable = {k: v for k, v in job.items() if k != "request"}
+        (JOB_DIR / f"{job_id}.json").write_text(
+            json.dumps(serialisable, default=str), encoding="utf-8"
+        )
+    except OSError:
+        # Persistence is a convenience; never fail a completed run over it.
+        pass
+
+
+def _tiepoints_from(reg: dict) -> TiePoints | None:
+    """Build the tie-point payload, tolerating partial data from a failed run."""
+    moving = reg.get("mkpts_moving") or []
+    if not moving:
+        return None
+    n = len(moving)
+    return TiePoints(
+        moving       = moving,
+        ref          = reg.get("mkpts_ref") or [],
+        inlier_mask  = reg.get("inlier_mask") or [False] * n,
+        residuals_px = reg.get("residuals_px") or [0.0] * n,
+    )
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -144,29 +184,43 @@ async def get_result(job_id: str):
     if job["status"] not in (JobStatus.done, JobStatus.failed):
         raise HTTPException(status_code=202, detail="Job not yet complete")
 
-    r = job.get("result", {})
-    step_image_urls = job.get("step_image_urls", {})
+    r = job.get("result", {}) or {}
+    reg = r.get("register_result", {}) or {}
     overlap_fname = Path(r["overlap_map_path"]).name if "overlap_map_path" in r else None
-    overlap_url = f"/images/overlap/{overlap_fname}" if overlap_fname else None
+
+    common = dict(
+        job_id          = job_id,
+        step_image_urls = job.get("step_image_urls", {}),
+        overlap_map_url = f"/images/overlap/{overlap_fname}" if overlap_fname else None,
+        provenance      = r.get("provenance"),
+        # Sent on failure too: a failed run is exactly when someone needs to
+        # look at where the matches went wrong.
+        tiepoints       = _tiepoints_from(reg),
+        homography      = reg.get("homography"),
+        patch_size      = PATCH_SIZE,
+        transfer        = TransferStats(**(r.get("transfer") or {})),
+    )
 
     if job["status"] == JobStatus.failed:
-        return RegistrationResult(
-            job_id          = job_id,
-            status          = JobStatus.failed,
-            error           = job.get("error"),
-            step_image_urls = step_image_urls,
-            overlap_map_url = overlap_url,
-            provenance      = r.get("provenance"),
-        )
+        return RegistrationResult(status=JobStatus.failed, error=job.get("error"), **common)
 
     return RegistrationResult(
-        job_id          = job_id,
-        status          = JobStatus.done,
-        metrics         = MetricsResult(**r["metrics"]) if "metrics" in r else None,
-        step_image_urls = step_image_urls,
-        overlap_map_url = overlap_url,
-        provenance      = r.get("provenance"),
+        status  = JobStatus.done,
+        metrics = MetricsResult(**r["metrics"]) if "metrics" in r else None,
+        **common,
     )
+
+
+@app.get("/api/patch/{job_id}/{which}.png")
+async def serve_patch(job_id: str, which: Literal["ch2", "lroc", "warped"]):
+    """The bare patches the interactive comparator composites."""
+    job = _read(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    path = ((job.get("result") or {}).get("raw_patches") or {}).get(which)
+    if not path or not Path(path).exists():
+        raise HTTPException(status_code=404, detail=f"No {which} patch for this job")
+    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/images/posters/{filename}")

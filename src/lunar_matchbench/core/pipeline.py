@@ -70,6 +70,26 @@ def _footer(fig, text: str):
     fig.text(0.03, 0.012, text, color=INK_MUTED, fontsize=8, ha="left", family="monospace")
 
 
+def _save_raw_patches(ch2, lroc, result: dict, label: str) -> dict:
+    """Write bare patch PNGs -- no titles, axes or chrome -- for the browser.
+
+    The matplotlib posters stay the scientific record. These are the pixels the
+    interactive comparator and tie-point overlay composite directly, so they
+    must carry no annotation of their own.
+    """
+    out_dir = POSTER_DIR / "raw"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = {"ch2": out_dir / f"{label}_ch2.png", "lroc": out_dir / f"{label}_lroc.png"}
+    cv2.imwrite(str(paths["ch2"]), ch2)
+    cv2.imwrite(str(paths["lroc"]), lroc)
+    if result.get("status") == "SUCCESS" and result.get("homography") is not None:
+        h, w = lroc.shape[:2]
+        warped = cv2.warpPerspective(ch2, np.array(result["homography"]), (w, h))
+        paths["warped"] = out_dir / f"{label}_warped.png"
+        cv2.imwrite(str(paths["warped"]), warped)
+    return {k: str(v) for k, v in paths.items()}
+
+
 def _transfer_snapshot(reader) -> dict:
     """Byte accounting for the UI, so "fetched 38.7 MB of 529 MB" is a fact.
 
@@ -271,6 +291,7 @@ def run_pipeline(
             "reason":      reason,
             "transfer":    dict(transfer),
             "register_result": result,
+            "raw_patches": _save_raw_patches(ch2_patch, lroc_patch, result, label),
             "step_images": step_images,
             "overlap_map_path": str(overlap_path),
             "provenance":  prov,
@@ -282,6 +303,7 @@ def run_pipeline(
         "status":      "SUCCESS",
         "transfer":    dict(transfer),
         "register_result": result,
+        "raw_patches": _save_raw_patches(ch2_patch, lroc_patch, result, label),
         "metrics":     {
             "matcher":            result["matcher"],
             "n_inliers":          result["n_inliers"],

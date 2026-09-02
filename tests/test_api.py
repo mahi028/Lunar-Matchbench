@@ -49,3 +49,87 @@ def test_post_registration_job(monkeypatch):
     data = response.json()
     assert "job_id" in data
     assert data["status"] in ["queued", "running"]
+
+
+def test_patch_endpoint_404s_for_unknown_job():
+    response = client.get("/api/patch/nope/ch2.png")
+    assert response.status_code == 404
+
+
+def test_patch_endpoint_rejects_unknown_kind():
+    response = client.get("/api/patch/nope/sideways.png")
+    assert response.status_code == 422
+
+
+def test_result_model_accepts_tiepoints():
+    from lunar_matchbench.api.models import RegistrationResult, TiePoints
+
+    result = RegistrationResult(
+        job_id="abc",
+        status="done",
+        tiepoints=TiePoints(
+            moving=[[1.0, 2.0]], ref=[[3.0, 4.0]],
+            inlier_mask=[True], residuals_px=[0.5],
+        ),
+        homography=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        patch_size=1024,
+    )
+    assert result.tiepoints.moving == [[1.0, 2.0]]
+    assert result.patch_size == 1024
+    assert result.tiepoints.residuals_px == [0.5]
+
+
+def test_result_exposes_tiepoints_from_a_finished_job():
+    """The browser draws matches itself, so the raw arrays must reach it."""
+    from lunar_matchbench.api import app as app_mod
+
+    job_id = "tptest01"
+    app_mod._store(job_id, {
+        "status": app_mod.JobStatus.done,
+        "step_image_urls": {},
+        "result": {
+            "metrics": {
+                "matcher": "SIFT", "n_inliers": 1, "n_raw_matches": 2,
+                "inlier_ratio_pct": 50.0, "rmse_px": 1.5,
+                "spatial_uniformity": 0.5, "elapsed_sec": 0.1,
+            },
+            "register_result": {
+                "mkpts_moving": [[1.0, 2.0], [3.0, 4.0]],
+                "mkpts_ref": [[5.0, 6.0], [7.0, 8.0]],
+                "inlier_mask": [True, False],
+                "residuals_px": [0.5, 9.0],
+                "homography": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            },
+            "transfer": {"fetched_bytes": 100, "cached_bytes": 0,
+                         "requests": 1, "product_bytes": 5000},
+        },
+    })
+    data = client.get(f"/api/result/{job_id}").json()
+    assert data["tiepoints"]["moving"] == [[1.0, 2.0], [3.0, 4.0]]
+    assert data["tiepoints"]["inlier_mask"] == [True, False]
+    assert data["tiepoints"]["residuals_px"] == [0.5, 9.0]
+    assert data["transfer"]["product_bytes"] == 5000
+    assert data["patch_size"] == 1024
+
+
+def test_failed_job_still_exposes_tiepoints():
+    """A failure is where the tie-point view matters most -- do not withhold it."""
+    from lunar_matchbench.api import app as app_mod
+
+    job_id = "tptest02"
+    app_mod._store(job_id, {
+        "status": app_mod.JobStatus.failed,
+        "error": "did not converge",
+        "step_image_urls": {},
+        "result": {
+            "register_result": {
+                "mkpts_moving": [[1.0, 2.0]],
+                "mkpts_ref": [[5.0, 6.0]],
+                "inlier_mask": [False],
+                "residuals_px": [42.0],
+            },
+        },
+    })
+    data = client.get(f"/api/result/{job_id}").json()
+    assert data["status"] == "failed"
+    assert data["tiepoints"]["residuals_px"] == [42.0]
