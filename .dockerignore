@@ -1,0 +1,14 @@
+.venv
+data_store
+issdc_ch2_output
+outputs
+downloads
+.git
+.pytest_cache
+__pycache__
+*.pyc
+.env
+.claude
+*.ipynb
+*.pdf
+*.pptx
