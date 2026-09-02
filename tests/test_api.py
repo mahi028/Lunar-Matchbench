@@ -150,3 +150,45 @@ def test_ui_serves_console_shell():
 def test_ui_static_assets_are_served():
     for path in ("/static/css/tokens.css", "/static/css/console.css"):
         assert client.get(path).status_code == 200, path
+
+
+def test_strip_preview_404s_without_a_product():
+    assert client.get("/api/strip/nope/preview.png?line=100").status_code == 404
+
+
+def test_strip_preview_reads_the_requested_line(tmp_path):
+    """The slider's preview must read the line asked for, clamped to the strip."""
+    import numpy as np
+
+    from lunar_matchbench.api import app as app_mod
+
+    class FakeReader:
+        total_lines = 40000
+        total_samples = 512
+        stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
+
+        def __init__(self):
+            self.asked = None
+
+        def read_lines(self, start, n):
+            self.asked = (start, n)
+            rng = np.random.default_rng(4)
+            base = rng.normal(500, 40, (n, self.total_samples))
+            return np.cumsum(base, axis=1).astype(np.float32)   # spatially correlated
+
+    reader = FakeReader()
+    app_mod._store("stripjob", {
+        "status": app_mod.JobStatus.done,
+        "result": {"lroc_candidate": {"filename": "F.IMG", "url": "http://x/F.IMG"}},
+    })
+    import lunar_matchbench.core.downloader as dl
+    original = dl.open_lroc_reader
+    dl.open_lroc_reader = lambda *a, **k: reader
+    try:
+        resp = client.get("/api/strip/stripjob/preview.png?line=20000&height=256")
+    finally:
+        dl.open_lroc_reader = original
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "image/png"
+    assert reader.asked == (20000 - 128, 256), reader.asked

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -224,6 +224,50 @@ async def serve_patch(job_id: str, which: Literal["ch2", "lroc", "warped"]):
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail=f"No {which} patch for this job")
     return FileResponse(path, media_type="image/png")
+
+
+@app.get("/api/strip/{job_id}/preview.png")
+async def serve_strip_preview(job_id: str, line: int = 0, height: int = 320):
+    """Render the LROC strip at an arbitrary scan line.
+
+    This is what makes the strip locator worth dragging: the rail stops being a
+    readout and becomes a way to look anywhere in a 52,224-line product. One
+    ranged read per position, cached, so revisiting a line costs nothing --
+    which is only affordable because the reader streams rather than downloads.
+    """
+    import cv2
+    import numpy as np
+
+    from lunar_matchbench.core.downloader import open_lroc_reader
+    from lunar_matchbench.utils.image import normalise_uint8, resize_to
+
+    job = _read(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    candidate = (job.get("result") or {}).get("lroc_candidate")
+    if not candidate:
+        raise HTTPException(status_code=404, detail="This run has no LROC product to preview")
+
+    height = max(64, min(height, 1024))
+    try:
+        reader = open_lroc_reader(candidate)
+        start = max(0, min(int(line) - height // 2, reader.total_lines - height))
+        window = reader.read_lines(start, height)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not read the strip: {exc}")
+
+    if window.size == 0:
+        raise HTTPException(status_code=404, detail="No imagery at that scan line")
+
+    valid = window[~np.isnan(window)]
+    if valid.size < 500:
+        raise HTTPException(status_code=404, detail="No imagery at that scan line")
+
+    preview = resize_to(normalise_uint8(window), 256)
+    ok, buf = cv2.imencode(".png", preview)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Could not encode the preview")
+    return Response(content=buf.tobytes(), media_type="image/png")
 
 
 @app.get("/images/posters/{filename}")

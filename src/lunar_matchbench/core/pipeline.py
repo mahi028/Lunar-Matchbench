@@ -82,6 +82,15 @@ def _save_raw_patches(ch2, lroc, result: dict, label: str) -> dict:
     """
     out_dir = POSTER_DIR / "raw"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The comparator overlays these two directly, so a size mismatch would show
+    # up as a misalignment that the registration did not actually make. Both
+    # already come out of the extractors at PATCH_SIZE; this makes that a
+    # guarantee rather than a coincidence of two separate code paths.
+    if ch2.shape[:2] != lroc.shape[:2]:
+        h, w = lroc.shape[:2]
+        ch2 = cv2.resize(ch2, (w, h), interpolation=cv2.INTER_AREA)
+
     paths = {"ch2": out_dir / f"{label}_ch2.png", "lroc": out_dir / f"{label}_lroc.png"}
     cv2.imwrite(str(paths["ch2"]), ch2)
     cv2.imwrite(str(paths["lroc"]), lroc)
@@ -269,6 +278,8 @@ def run_pipeline(
         "lroc_gsd_m": lroc_gsd,
         "scale_factor_used": round(scale, 3),
         "lroc_start_time": best["start_time"],
+        "lroc_total_candidates": len(candidates),
+        "lroc_candidates_tried": len(skipped) + 1,
         "ch2_patch_sha256": hashlib.sha256(ch2_patch.tobytes()).hexdigest()[:16] + "...",
         "lroc_patch_sha256": hashlib.sha256(lroc_patch.tobytes()).hexdigest()[:16] + "...",
         # Whether the LROC scan-line locking found a confident visual
@@ -322,6 +333,7 @@ def run_pipeline(
             "reason":      reason,
             "transfer":    dict(transfer),
             "register_result": result,
+            "lroc_candidate": best,
             "raw_patches": _save_raw_patches(ch2_patch, lroc_patch, result, label),
             "step_images": step_images,
             "overlap_map_path": str(overlap_path),
@@ -334,6 +346,7 @@ def run_pipeline(
         "status":      "SUCCESS",
         "transfer":    dict(transfer),
         "register_result": result,
+        "lroc_candidate": best,
         "raw_patches": _save_raw_patches(ch2_patch, lroc_patch, result, label),
         "metrics":     {
             "matcher":            result["matcher"],

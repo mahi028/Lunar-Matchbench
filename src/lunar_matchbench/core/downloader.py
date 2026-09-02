@@ -336,7 +336,44 @@ def discover_lroc_products(lat: float, lon: float,
         })
 
     candidates.sort(key=lambda x: (not x["is_inside"], x["centre_dist"]))
-    return candidates
+    # Spread the attempt budget across different spacecraft passes rather than
+    # spending it on both halves of one stereo pair.
+    return interleave_by_acquisition(candidates)
+
+
+def _acquisition_key(candidate: dict) -> str:
+    """Identify the spacecraft pass a candidate came from.
+
+    LROC NAC ships as a left/right pair from one pass -- nac.m1359306139lc and
+    nac.m1359306139rc are the same moment, same sun angle, same shadows -- so
+    they count as one acquisition for diversity purposes.
+    """
+    pds_id = (candidate.get("pds_id") or "").strip().lower()
+    if pds_id:
+        return re.sub(r"[lr]c$", "", pds_id)
+    return (candidate.get("start_time") or candidate.get("filename") or "?")
+
+
+def interleave_by_acquisition(ranked: list[dict]) -> list[dict]:
+    """Reorder so consecutive candidates come from different acquisitions.
+
+    Ranking purely by footprint puts the two halves of one stereo pair at the
+    top, so all three attempts get the same illumination and a coordinate that
+    fails under that sun angle never gets a second chance. Rank order is kept
+    inside each acquisition; only the interleaving across them is new.
+    """
+    groups: dict[str, list[dict]] = {}
+    for cand in ranked:
+        groups.setdefault(_acquisition_key(cand), []).append(cand)
+
+    out: list[dict] = []
+    queues = list(groups.values())
+    while queues:
+        for q in list(queues):
+            out.append(q.pop(0))
+            if not q:
+                queues.remove(q)
+    return out
 
 
 def download_lroc(candidate: dict, verbose: bool = True) -> Path:

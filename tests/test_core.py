@@ -272,3 +272,45 @@ def test_localization_reports_strip_coverage():
     assert 0.0 <= info["strip_fraction_searched"] <= 1.0
     assert isinstance(info["whole_strip_searched"], bool)
     assert info["lines_searched"] <= info["total_lines"]
+
+
+def test_lroc_candidates_are_interleaved_across_acquisitions():
+    """Three attempts must land on three different acquisitions.
+
+    The nearest-by-footprint ordering fills the attempt budget with the lc/rc
+    halves of one stereo pair -- same spacecraft pass, same sun angle -- so a
+    coordinate that fails under that illumination has no second chance.
+    """
+    from lunar_matchbench.core.downloader import interleave_by_acquisition
+
+    ranked = [
+        {"pds_id": "nac.m111lc", "start_time": "2011-01-01T00:00:00"},
+        {"pds_id": "nac.m111rc", "start_time": "2011-01-01T00:00:00"},
+        {"pds_id": "nac.m222lc", "start_time": "2012-02-02T00:00:00"},
+        {"pds_id": "nac.m222rc", "start_time": "2012-02-02T00:00:00"},
+        {"pds_id": "nac.m333lc", "start_time": "2013-03-03T00:00:00"},
+    ]
+    out = interleave_by_acquisition(ranked)
+    assert [c["pds_id"] for c in out[:3]] == ["nac.m111lc", "nac.m222lc", "nac.m333lc"]
+    # Nothing may be dropped -- the stereo partners come after the diverse head.
+    assert sorted(c["pds_id"] for c in out) == sorted(c["pds_id"] for c in ranked)
+
+
+def test_interleaving_preserves_rank_within_an_acquisition():
+    from lunar_matchbench.core.downloader import interleave_by_acquisition
+
+    ranked = [
+        {"pds_id": "nac.m111lc", "start_time": "t1"},
+        {"pds_id": "nac.m111rc", "start_time": "t1"},
+        {"pds_id": "nac.m222lc", "start_time": "t2"},
+    ]
+    out = interleave_by_acquisition(ranked)
+    order = [c["pds_id"] for c in out]
+    assert order.index("nac.m111lc") < order.index("nac.m111rc")
+
+
+def test_interleaving_survives_missing_identifiers():
+    from lunar_matchbench.core.downloader import interleave_by_acquisition
+
+    ranked = [{"pds_id": None, "start_time": ""}, {"pds_id": "nac.m1lc", "start_time": "t"}]
+    assert len(interleave_by_acquisition(ranked)) == 2
