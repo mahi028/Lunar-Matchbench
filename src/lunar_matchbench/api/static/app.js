@@ -11,6 +11,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const provPre = document.getElementById("provenance-pre");
   const errorMsg = document.getElementById("error-msg");
   const retryBtn = document.getElementById("retry-btn");
+  const diagnosis = document.getElementById("diagnosis");
 
   const stageViewer = document.getElementById("stage-viewer");
   const stageIndexEl = document.getElementById("stage-index");
@@ -228,6 +229,75 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function fmtMB(bytes) {
+    if (!bytes) return "0 MB";
+    return (bytes / 1e6).toFixed(1) + " MB";
+  }
+
+  // Two very different failures look identical in a bare error string:
+  // "these images genuinely do not correspond" and "we may have been looking
+  // at the wrong part of the strip". The pipeline already distinguishes them
+  // via the scan-line lock, so say which one this was.
+  function renderDiagnosis(data) {
+    const prov = data.provenance || {};
+    const loc = prov.lroc_localization;
+    const tx = data.transfer;
+    const rows = [];
+
+    if (loc) {
+      const ok = loc.confident;
+      rows.push(`
+        <div class="diag-row ${ok ? "diag-good" : "diag-warn"}">
+          <span class="diag-label">Scan-line lock</span>
+          <span class="diag-value">${ok ? "CONFIDENT" : "NOT VERIFIED"}</span>
+          <span class="diag-detail">
+            ${loc.best_n} correlated matches vs ${loc.min_confident_matches} threshold
+            &middot; searched ${loc.windows_fetched} window${loc.windows_fetched === 1 ? "" : "s"}
+            of ${loc.window_lines} lines
+          </span>
+        </div>`);
+
+      if (!ok) {
+        const drift = Math.abs(
+          (loc.used_center_line || 0) - (loc.approx_center_line || 0));
+        rows.push(`
+          <p class="diag-note">
+            This patch is the <strong>raw pushbroom geometry estimate</strong>, not a
+            visually verified location &mdash; so this run does not show that the two
+            images fail to correspond. It may simply not have been looking at the
+            matching part of the LROC strip. Searching further along the strip, or
+            trying a neighbouring coordinate, may still succeed.
+            ${drift ? `Geometry and search peak differ by ${drift} lines.` : ""}
+          </p>`);
+      } else {
+        const drift = Math.abs(
+          (loc.used_center_line || 0) - (loc.approx_center_line || 0));
+        rows.push(`
+          <p class="diag-note">
+            The patch was visually locked onto the LROC strip, ${drift} lines from the
+            raw geometry estimate, so this result reflects the imagery itself.
+          </p>`);
+      }
+    }
+
+    if (tx && (tx.fetched_bytes || tx.cached_bytes)) {
+      const total = tx.product_bytes
+        ? ` of a ${fmtMB(tx.product_bytes)} product` : "";
+      rows.push(`
+        <div class="diag-row diag-info">
+          <span class="diag-label">Data transferred</span>
+          <span class="diag-value">${fmtMB(tx.fetched_bytes)}</span>
+          <span class="diag-detail">
+            streamed over ${tx.requests} byte-range request${tx.requests === 1 ? "" : "s"}${total}
+            ${tx.cached_bytes ? `&middot; ${fmtMB(tx.cached_bytes)} served from cache` : ""}
+          </span>
+        </div>`);
+    }
+
+    diagnosis.innerHTML = rows.join("");
+    diagnosis.hidden = rows.length === 0;
+  }
+
   function showSummary(success, errText, data) {
     summaryTitle.textContent = success ? "Registration succeeded" : "Registration did not converge";
     errorMsg.hidden = !!success;
@@ -265,6 +335,8 @@ document.addEventListener("DOMContentLoaded", () => {
         </div>
       `;
     }
+
+    renderDiagnosis(data);
 
     if (data.provenance) {
       provPre.textContent = JSON.stringify(data.provenance, null, 2);
