@@ -73,8 +73,10 @@ def _run_pipeline(job_id: str, req: RegisterRequest) -> None:
     try:
         from lunar_matchbench.core.pipeline import run_pipeline
 
-        def _cb(step, total, msg, step_images=None):
+        def _cb(step, total, msg, step_images=None, transfer=None):
             data = {"progress_msg": msg, "progress_step": step}
+            if transfer:
+                data["transfer"] = transfer
             if step_images:
                 data["step_image_urls"] = {k: _poster_url(v) for k, v in step_images.items()}
             _store(job_id, data)

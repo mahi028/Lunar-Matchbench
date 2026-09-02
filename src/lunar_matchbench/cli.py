@@ -62,7 +62,7 @@ def main():
         print(f"  Target: {lat:.4f} N, {lon:.4f} E | Instrument: {inst.upper()} | Matcher: {matcher.upper()}")
         print(f"=======================================================\n")
 
-        def _print_cb(step, total, msg, step_images=None):
+        def _print_cb(step, total, msg, step_images=None, transfer=None):
             print(f"[{step}/{total}] {msg}")
 
         result = run_pipeline(lat=lat, lon=lon, instrument=inst, matcher=matcher, progress_cb=_print_cb)

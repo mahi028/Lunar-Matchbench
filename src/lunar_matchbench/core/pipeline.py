@@ -70,6 +70,22 @@ def _footer(fig, text: str):
     fig.text(0.03, 0.012, text, color=INK_MUTED, fontsize=8, ha="left", family="monospace")
 
 
+def _transfer_snapshot(reader) -> dict:
+    """Byte accounting for the UI, so "fetched 38.7 MB of 529 MB" is a fact.
+
+    A local cached product reports zeros with product_bytes 0, which is how the
+    UI tells "served from disk" apart from "streamed over the network".
+    """
+    stats = getattr(reader, "stats", {}) or {}
+    rf = getattr(reader, "rf", None)
+    return {
+        "fetched_bytes": stats.get("fetched_bytes", 0),
+        "cached_bytes":  stats.get("cached_bytes", 0),
+        "requests":      stats.get("requests", 0),
+        "product_bytes": getattr(rf, "size", 0) if rf is not None else 0,
+    }
+
+
 def run_pipeline(
     lat: float,
     lon: float,
@@ -98,13 +114,16 @@ def run_pipeline(
     label = job_id or f"lat{lat}_lon{lon}_{instrument}"
     step_images: dict[str, str] = {}
 
+    transfer: dict = {"fetched_bytes": 0, "cached_bytes": 0,
+                      "requests": 0, "product_bytes": 0}
+
     def _progress(step: int, msg: str):
         if progress_cb:
             # step_images is mutated in place as each artefact is written, so
             # passing it by reference here means every call carries whatever
             # is ready so far -- a status poll mid-run sees images appear
             # incrementally, not all at once at the very end.
-            progress_cb(step, total_steps, msg, dict(step_images))
+            progress_cb(step, total_steps, msg, dict(step_images), dict(transfer))
 
     # ── 1. CH2 patch ──────────────────────────────────────────────────────────
     _progress(1, "Locating Chandrayaan-2 patch...")
@@ -182,6 +201,7 @@ def run_pipeline(
         if patch is not None:
             best, lroc_path, lroc_patch = candidate, path, patch
             lroc_gsd, scale, loc_info = candidate_gsd, candidate_scale, candidate_loc_info
+            transfer.update(_transfer_snapshot(path))
             break
         skipped.append(candidate["filename"])
 
@@ -249,6 +269,8 @@ def run_pipeline(
         return {
             "status":      "FAILED",
             "reason":      reason,
+            "transfer":    dict(transfer),
+            "register_result": result,
             "step_images": step_images,
             "overlap_map_path": str(overlap_path),
             "provenance":  prov,
@@ -258,6 +280,8 @@ def run_pipeline(
 
     return {
         "status":      "SUCCESS",
+        "transfer":    dict(transfer),
+        "register_result": result,
         "metrics":     {
             "matcher":            result["matcher"],
             "n_inliers":          result["n_inliers"],

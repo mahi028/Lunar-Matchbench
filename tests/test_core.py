@@ -200,3 +200,25 @@ def test_reported_rmse_matches_inlier_residuals():
     mask = np.array(result["inlier_mask"], dtype=bool)
     expected = float(np.sqrt(np.mean(resid[mask] ** 2)))
     assert abs(expected - result["reprojection_rmse_px"]) < 1e-2
+
+
+def test_transfer_snapshot_reads_streaming_reader():
+    from lunar_matchbench.core.pipeline import _transfer_snapshot
+
+    class Streamed:
+        stats = {"fetched_bytes": 10, "cached_bytes": 5, "requests": 2}
+        rf = type("F", (), {"size": 999})()
+
+    assert _transfer_snapshot(Streamed()) == {
+        "fetched_bytes": 10, "cached_bytes": 5, "requests": 2, "product_bytes": 999,
+    }
+
+
+def test_transfer_snapshot_handles_local_reader():
+    """A local file has no rf and no transfer -- it must not crash or invent one."""
+    from lunar_matchbench.core.pipeline import _transfer_snapshot
+
+    class Local:
+        stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
+
+    assert _transfer_snapshot(Local())["product_bytes"] == 0
