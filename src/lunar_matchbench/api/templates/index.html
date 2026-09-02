@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lunar-MatchBench | Cross-Mission Image Registration</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css?v=4" />
+</head>
+<body>
+  <header>
+    <div class="masthead">
+      <div class="wordmark">
+        <span class="wordmark-mark">LM</span>
+        <div>
+          <h1>Lunar&#8209;MatchBench</h1>
+          <p class="tagline">Chandrayaan&#8209;2 &#8596; NASA LROC NAC Cross&#8209;Mission Registration</p>
+        </div>
+      </div>
+      <div class="badge-row">
+        <span class="badge badge-isro">ISRO CH2</span>
+        <span class="badge badge-nasa">NASA LRO</span>
+        <span class="badge badge-xfeat">XFeat · CVPR 2024</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card form-card">
+      <h2>Registration Parameters</h2>
+      <form id="reg-form">
+        <div class="field-grid">
+          <div class="field">
+            <label for="lat">Latitude (&deg;N)</label>
+            <input type="number" id="lat" name="lat" step="any" min="-90" max="90"
+                   value="15.0" placeholder="e.g. 15.0" required />
+            <span class="hint">Planetocentric, &minus;90 to +90</span>
+          </div>
+          <div class="field">
+            <label for="lon">Longitude (&deg;E)</label>
+            <input type="number" id="lon" name="lon" step="any" min="0" max="360"
+                   value="289.2" placeholder="e.g. 289.2" required />
+            <span class="hint">0 &ndash; 360 East</span>
+          </div>
+          <div class="field">
+            <label for="instrument">CH2 Instrument</label>
+            <select id="instrument" name="instrument">
+              <option value="tmc" selected>TMC-2 (5 m/px, wide)</option>
+              <option value="ohrc">OHRC (0.25 m/px, high-res)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="matcher">Feature Matcher</label>
+            <select id="matcher" name="matcher">
+              <option value="xfeat" selected>XFeat (CVPR 2024)</option>
+              <option value="sift">SIFT (classical baseline)</option>
+            </select>
+          </div>
+        </div>
+        <div class="presets">
+          <span class="preset-label">Quick presets</span>
+          <button type="button" class="preset-btn" data-lat="15.0" data-lon="289.2">Oceanus Procellarum</button>
+          <button type="button" class="preset-btn" data-lat="10.2" data-lon="289.5">Sinus Aestuum</button>
+          <button type="button" class="preset-btn" data-lat="5.17879877" data-lon="288.954173">Rayed Crater (5.2&deg;N)</button>
+          <button type="button" class="preset-btn preset-btn--fail" data-lat="3.613415864967716" data-lon="289.12239203822105">Known Failure Case (3.6&deg;N)</button>
+        </div>
+        <button type="submit" id="run-btn" class="run-btn">
+          <span id="btn-text">Run Registration</span>
+        </button>
+      </form>
+    </section>
+
+    <section class="card pipeline-card" id="pipeline-card" hidden>
+      <h2>Pipeline Execution</h2>
+      <ol class="stepper" id="stepper">
+        <li class="step" id="step-1"><span class="step-dot"></span><span class="step-label">Locate CH2 patch</span></li>
+        <li class="step" id="step-2"><span class="step-dot"></span><span class="step-label">Query NASA ODE</span></li>
+        <li class="step" id="step-3"><span class="step-dot"></span><span class="step-label">Download LROC NAC</span></li>
+        <li class="step" id="step-4"><span class="step-dot"></span><span class="step-label">Extract patch</span></li>
+        <li class="step" id="step-5"><span class="step-dot"></span><span class="step-label">Detect keypoints</span></li>
+        <li class="step" id="step-6"><span class="step-dot"></span><span class="step-label">Match features</span></li>
+        <li class="step" id="step-7"><span class="step-dot"></span><span class="step-label">MAGSAC++ verify</span></li>
+        <li class="step" id="step-8"><span class="step-dot"></span><span class="step-label">Finalize</span></li>
+      </ol>
+      <p class="status-msg" id="status-msg">Initializing&hellip;</p>
+
+      <div class="stage-viewer" id="stage-viewer" hidden>
+        <div class="stage-head">
+          <span class="stage-index" id="stage-index"></span>
+          <span class="stage-title" id="stage-title"></span>
+          <span class="stage-desc" id="stage-desc"></span>
+          <span class="stage-counter" id="stage-counter"></span>
+        </div>
+        <div class="stage-frame">
+          <img id="stage-img-a" class="stage-img" alt="" />
+          <img id="stage-img-b" class="stage-img" alt="" />
+          <button type="button" class="stage-nav stage-nav--prev" id="stage-prev" aria-label="Previous step">&#8249;</button>
+          <button type="button" class="stage-nav stage-nav--next" id="stage-next" aria-label="Next step">&#8250;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card summary-card" id="summary-card" hidden>
+      <h2 id="summary-title">Registration Result</h2>
+      <div class="metrics-row" id="metrics-row"></div>
+      <p class="error-msg-text" id="error-msg" hidden></p>
+      <details class="provenance-details" id="provenance-details">
+        <summary>Scientific provenance &amp; ephemeris</summary>
+        <pre id="provenance-pre"></pre>
+      </details>
+      <button id="retry-btn" class="run-btn secondary">Try Another Coordinate</button>
+    </section>
+  </main>
+
+  <footer>
+    <p>SIH26166 &middot; Space Technology &middot; ISRO &middot; IIT Madras BS Programme</p>
+    <p>Data: <a href="https://chmapbrowse.issdc.gov.in/" target="_blank">ISRO ISSDC</a>
+       &nbsp;&middot;&nbsp;
+       <a href="https://oderest.rsl.wustl.edu/" target="_blank">NASA ODE</a>
+       &nbsp;&middot;&nbsp;
+       <a href="https://github.com/verlab/accelerated_features" target="_blank">XFeat</a>
+    </p>
+  </footer>
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>

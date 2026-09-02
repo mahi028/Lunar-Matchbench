@@ -1,0 +1,15 @@
+.env
+downloads
+.venv
+
+# Downloaded science data (ISRO CH2 zips, NASA LROC .IMG) and generated
+# pipeline outputs (posters, overlap maps, job artifacts) -- large, regenerable
+# by running the pipeline, and not meant to live in version control.
+data_store/
+issdc_ch2_output/
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
