@@ -1,6 +1,6 @@
 import { fetchResult, fetchStatus, startRun } from "./api.js";
 import { clearLocator, renderLocator } from "./locator.js";
-import { mountComparator } from "./comparator.js";
+import { MODES, mountComposite } from "./composite.js";
 import { mountTiePoints } from "./tiepoints.js";
 import { renderCharts } from "./charts.js";
 import { renderContext } from "./context.js";
@@ -145,9 +145,9 @@ function renderResult(jobId, data) {
 
   stage.hidden = false;
   stageBody.innerHTML = "";
-  stageTools.innerHTML = `
-    <button type="button" class="tool" data-mode="swipe" aria-pressed="true">Swipe</button>
-    <button type="button" class="tool" data-mode="fade" aria-pressed="false">Fade</button>`;
+  stageTools.innerHTML = MODES.map((mode, i) =>
+    `<button type="button" class="tool" data-mode="${mode.id}"
+             aria-pressed="${i === 0}">${mode.label}</button>`).join("");
 
   // Two square views of the same ground, side by side where there is room, so
   // the alignment and the correspondences can be read against each other.
@@ -157,11 +157,13 @@ function renderResult(jobId, data) {
 
   const cmpHost = document.createElement("div");
   media.appendChild(cmpHost);
-  const comparator = mountComparator(cmpHost, { jobId, mode: "swipe" });
+  const composite = mountComposite(cmpHost, {
+    jobId, patchSize: data.patch_size || 1024,
+  });
   stageTools.onclick = (e) => {
     const btn = e.target.closest(".tool");
     if (!btn) return;
-    comparator.setMode(btn.dataset.mode);
+    composite.setMode(btn.dataset.mode);
     stageTools.querySelectorAll(".tool").forEach((b) =>
       b.setAttribute("aria-pressed", String(b === btn)));
   };

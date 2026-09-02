@@ -49,6 +49,33 @@ DONE_JOB = {
 }
 
 
+@pytest.fixture(scope="module", autouse=True)
+def patch_files(tmp_path_factory):
+    """Write real patch PNGs for the stubbed job.
+
+    The compositor reads actual pixels off a canvas, so a job with no imagery
+    cannot render at all. The old <img>-based comparator tolerated 404s by
+    showing broken images, which quietly meant the tests never exercised the
+    compositing path.
+    """
+    import cv2
+    import numpy as np
+
+    out = tmp_path_factory.mktemp("patches")
+    rng = np.random.default_rng(31)
+    terrain = cv2.GaussianBlur(
+        rng.integers(0, 255, (256, 256)).astype(np.uint8), (0, 0), 2.5)
+    shifted = np.roll(terrain, 6, axis=1)          # a small, visible offset
+
+    paths = {}
+    for name, img in (("ch2", terrain), ("lroc", shifted), ("warped", terrain)):
+        f = out / f"{name}.png"
+        cv2.imwrite(str(f), img)
+        paths[name] = str(f)
+    DONE_JOB["result"]["raw_patches"] = paths
+    return paths
+
+
 @pytest.fixture(scope="module")
 def live_server():
     from lunar_matchbench.api.app import app
@@ -114,43 +141,65 @@ def test_locator_flags_a_fully_searched_strip(page, live_server):
     assert page.locator("#locator").get_attribute("data-coverage") == "full"
 
 
-def test_comparator_exposes_both_frames_and_a_draggable_split(page, live_server):
+def test_compositor_offers_every_alignment_mode(page, live_server):
+    """Each mode fails differently; a swipe hides a rotation a checker exposes."""
     _seed("uitest03", DONE_JOB)
     page.goto(f"{live_server}/?job=uitest03", wait_until="networkidle")
-    page.wait_for_selector(".cmp", timeout=15000)
+    page.wait_for_selector('.cmp[data-ready="1"]', timeout=20000)
 
-    assert page.locator(".cmp-img[data-layer='reference']").count() == 1
-    assert page.locator(".cmp-img[data-layer='moving']").count() == 1
-    assert page.locator(".cmp-handle").count() == 1
+    modes = page.locator(".stage-tools .tool")
+    ids = [modes.nth(i).get_attribute("data-mode") for i in range(modes.count())]
+    assert ids == ["swipe", "checker", "overlay", "edges", "difference", "triptych"], ids
+
+
+def test_compositor_split_is_draggable_and_keyboard_operable(page, live_server):
+    _seed("uitest03b", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest03b", wait_until="networkidle")
+    page.wait_for_selector('.cmp[data-ready="1"]', timeout=20000)
 
     box = page.locator(".cmp").bounding_box()
     page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2)
     page.mouse.down()
     page.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + box["height"] / 2)
     page.mouse.up()
-    split = page.evaluate(
-        "getComputedStyle(document.querySelector('.cmp')).getPropertyValue('--split')")
-    assert float(split.strip()) < 0.45, f"split did not follow the drag: {split!r}"
-
-
-def test_comparator_split_is_keyboard_operable(page, live_server):
-    _seed("uitest03b", DONE_JOB)
-    page.goto(f"{live_server}/?job=uitest03b", wait_until="networkidle")
-    page.wait_for_selector(".cmp-handle", timeout=15000)
-    page.focus(".cmp-handle")
-    for _ in range(5):
-        page.keyboard.press("ArrowLeft")
     split = float(page.evaluate(
         "getComputedStyle(document.querySelector('.cmp')).getPropertyValue('--split')").strip())
-    assert split < 0.5, "arrow keys must move the split"
+    assert split < 0.45, split
+
+    page.focus(".cmp-handle")
+    for _ in range(4):
+        page.keyboard.press("ArrowRight")
+    assert float(page.evaluate(
+        "getComputedStyle(document.querySelector('.cmp')).getPropertyValue('--split')").strip()) > split
 
 
-def test_comparator_switches_to_fade(page, live_server):
+def test_compositor_switches_modes_and_explains_each(page, live_server):
     _seed("uitest04", DONE_JOB)
     page.goto(f"{live_server}/?job=uitest04", wait_until="networkidle")
-    page.wait_for_selector(".cmp", timeout=15000)
-    page.click("[data-mode='fade']")
-    assert page.locator(".cmp").get_attribute("data-mode") == "fade"
+    page.wait_for_selector('.cmp[data-ready="1"]', timeout=20000)
+
+    for mode in ("checker", "overlay", "edges", "difference", "triptych"):
+        page.click(f"[data-mode='{mode}']")
+        assert page.locator(".cmp").get_attribute("data-mode") == mode
+        assert page.inner_text("#cmp-hint").strip(), f"{mode} has no explanation"
+
+    # The tile-size control belongs to the checkerboard alone.
+    page.click("[data-mode='checker']")
+    assert page.locator('[data-for="checker"]').is_visible()
+    page.click("[data-mode='overlay']")
+    assert not page.locator('[data-for="checker"]').is_visible()
+
+
+def test_triptych_shows_three_panels(page, live_server):
+    """Moving, reference and registered -- the canvas widens to hold all three."""
+    _seed("uitest04b", DONE_JOB)
+    page.goto(f"{live_server}/?job=uitest04b", wait_until="networkidle")
+    page.wait_for_selector('.cmp[data-ready="1"]', timeout=20000)
+    page.click("[data-mode='triptych']")
+    page.wait_for_timeout(400)
+    w, h = page.evaluate(
+        "() => { const c = document.querySelector('.cmp-canvas'); return [c.width, c.height]; }")
+    assert w > h * 2.5, f"expected a three-panel canvas, got {w}x{h}"
 
 
 def test_tiepoint_overlay_reports_real_counts(page, live_server):
