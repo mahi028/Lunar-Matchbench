@@ -86,6 +86,21 @@ is invalid if they change.
 The consequence: the CH2 geometry lookup is nearly free over the network, while
 the raster still requires sequential inflation from the member start.
 
+**PRADAN range support** (`pradan.issdc.gov.in`), measured 2026-09-03 against
+`ch2_tmc_ncf_20191218T1121183775_d_img_gds.zip` via `tests/test_pradan_probe.py`:
+
+- `HEAD` → `200`, `Content-Length: 508443288`, **`Accept-Ranges: bytes`**
+- `GET Range: bytes=0-1023` → **`206`**, `Content-Range: bytes 0-1023/508443288`
+
+**Verdict: supported.** CH2 streaming is therefore viable and Task 10 of the
+implementation plan proceeds in full.
+
+This measurement also confirms the corruption diagnosis exactly. The true
+product is 508,443,288 bytes; the file the buggy resume produced was
+748,451,120 bytes. The difference is **240,007,832 bytes** — precisely the
+central-directory offset recorded for the archive's first member, i.e. the
+duplicated prefix, to the byte.
+
 ---
 
 ## 3. Design
