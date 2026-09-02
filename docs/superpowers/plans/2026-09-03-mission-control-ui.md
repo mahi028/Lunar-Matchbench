@@ -1965,3 +1965,41 @@ locator, which is the element this console should be remembered by.
 **Deviation from the plan:** Task 5's tests were written against `rect` bars and
 a 3-stage funnel; both changed as described above, and the tests changed with
 them. Stage-wide pan/zoom stays dropped, as recorded in the plan's self-review.
+
+---
+
+## Follow-up round (2026-09-03, user-directed)
+
+Requested: diverse candidate selection, equal patch sizes, fill the empty
+landing state, a footer, an animated Moon/stars/satellites background, a
+slidable scan-line strip, and more explained visuals.
+
+Backend:
+- `interleave_by_acquisition` spreads the three LROC attempts across three
+  different spacecraft passes. Ranking by footprint alone filled them with the
+  lc/rc halves of one stereo pair — same sun angle — which for a
+  sun-angle-invariance problem statement is the wrong failure mode.
+- `/api/strip/{job}/preview.png` renders any scan line of the reference product.
+- `_save_raw_patches` now guarantees equal dimensions rather than relying on two
+  extractors independently returning `PATCH_SIZE`. (They already matched at
+  1024×1024; this makes it a property rather than a coincidence.)
+- CH2 acquisition time is parsed from the ISSDC product name, which is the only
+  place it appears — without it the UI could only report one of the two dates,
+  not the separation between them.
+
+Frontend:
+- The rail is draggable, fetching one window on release and never during the
+  drag.
+- Landing state explains the tool, its four stages and every metric.
+- Footer credits both archives and lists the instruments.
+- Charts each carry a plain-language line; a new context panel reports the
+  resolution gap, ground covered, time between passes and how many reference
+  images were available, plus the footprint overlap map the pipeline had always
+  rendered and the UI had never shown.
+
+**The sky took measurement, not taste.** Orbiting the two spacecraft around the
+Moon's centre looked right in code and rendered zero visible saffron pixels
+across a 15-second sample — that centre sits below the fold, so an orbit around
+it is mostly off screen. The first placements that did render were sitting
+behind the panels, which is indistinguishable from not drawing them. Both were
+found by sampling the canvas rather than by looking at one screenshot.
