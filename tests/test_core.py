@@ -222,3 +222,22 @@ def test_transfer_snapshot_handles_local_reader():
         stats = {"fetched_bytes": 0, "cached_bytes": 0, "requests": 0}
 
     assert _transfer_snapshot(Local())["product_bytes"] == 0
+
+
+def test_warm_presets_match_the_ui_presets():
+    """If these drift apart, pre-warming silently warms the wrong coordinates.
+
+    That is worse than not warming at all: the demo looks prepared and still
+    stalls on the coordinate actually clicked.
+    """
+    import re
+    from pathlib import Path
+
+    from lunar_matchbench.cli import WARM_PRESETS
+
+    html = (Path(__file__).resolve().parents[1]
+            / "src/lunar_matchbench/api/templates/index.html").read_text(encoding="utf-8")
+    in_html = {(float(a), float(b))
+               for a, b in re.findall(r'data-lat="([-\d.]+)"\s+data-lon="([-\d.]+)"', html)}
+    assert in_html, "no presets found in index.html -- did the markup change?"
+    assert in_html == set(WARM_PRESETS)

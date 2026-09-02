@@ -18,6 +18,17 @@ import json
 from pathlib import Path
 
 
+# Kept in step with the quick-preset buttons in index.html; a test asserts they
+# match. Warming coordinates the demo does not use is worse than not warming at
+# all -- it looks prepared and still stalls on the one actually clicked.
+WARM_PRESETS = [
+    (15.0, 289.2),
+    (10.2, 289.5),
+    (5.17879877, 288.954173),
+    (3.613415864967716, 289.12239203822105),
+]
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="lunar-matchbench",
@@ -31,6 +42,11 @@ def main():
     p_reg.add_argument("--lon", type=float, default=289.2, help="Target longitude (degrees E, default: 289.2)")
     p_reg.add_argument("--instrument", choices=["tmc", "ohrc"], default="tmc", help="CH2 source instrument (default: tmc)")
     p_reg.add_argument("--matcher", choices=["xfeat", "sift"], default="xfeat", help="Feature matcher (default: xfeat)")
+
+    # Sub-command: warm
+    p_warm = subparsers.add_parser("warm", help="Pre-fetch preset coordinates into the range cache")
+    p_warm.add_argument("--instrument", choices=["tmc", "ohrc"], default="tmc",
+                        help="CH2 source instrument (default: tmc)")
 
     # Sub-command: serve
     p_srv = subparsers.add_parser("serve", help="Launch FastAPI web UI server")
@@ -47,6 +63,27 @@ def main():
         print(f"  Starting Lunar-MatchBench Web UI at http://{args.host}:{args.port}")
         print(f"=======================================================\n")
         uvicorn.run("lunar_matchbench.api.app:app", host=args.host, port=args.port, reload=args.reload)
+
+    elif args.command == "warm":
+        from lunar_matchbench.core.pipeline import run_pipeline
+
+        print("")
+        print(f"Warming {len(WARM_PRESETS)} preset coordinates ({args.instrument.upper()})...")
+        print("")
+        for lat, lon in WARM_PRESETS:
+            print(f"  {lat:>10.5f} N, {lon:>11.5f} E ... ", end="", flush=True)
+            try:
+                res = run_pipeline(lat=lat, lon=lon, instrument=args.instrument,
+                                   matcher="xfeat")
+                t = res.get("transfer", {})
+                print(f"{res['status']}  "
+                      f"(fetched {t.get('fetched_bytes', 0) / 1e6:.1f} MB, "
+                      f"cached {t.get('cached_bytes', 0) / 1e6:.1f} MB)")
+            except Exception as exc:
+                print(f"SKIPPED ({type(exc).__name__}: {exc})")
+        print("")
+        print("Cache warm. Preset runs will now serve from disk.")
+        print("")
 
     elif args.command == "register" or (args.command is None and len(sys.argv) > 1):
         # Default run registration
