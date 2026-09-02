@@ -1,0 +1,44 @@
+[project]
+name = "lunar-matchbench"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "astropy>=8.0.1",
+    "fastapi>=0.115.0",
+    "jinja2>=3.1.0",
+    "matplotlib>=3.11.1",
+    "opencv-contrib-python>=5.0.0.93",
+    "opencv-python>=5.0.0.93",
+    "pillow>=12.3.0",
+    "playwright>=1.62.0",
+    "python-dotenv>=1.2.3",
+    "python-multipart>=0.0.9",
+    "requests>=2.34.2",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+    "tqdm>=4.70.0",
+    "uvicorn[standard]>=0.30.0",
+]
+
+[project.scripts]
+lunar-matchbench = "lunar_matchbench.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lunar_matchbench"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["src_prot", ".venv", "issdc_ch2_output", "lroc_reference_output"]
+
