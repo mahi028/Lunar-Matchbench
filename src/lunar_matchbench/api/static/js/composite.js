@@ -21,9 +21,9 @@ const NASA = [91, 156, 255];
 export const MODES = [
   { id: "swipe", label: "Swipe", hint: "Drag the divider. Terrain should run straight through the seam." },
   { id: "checker", label: "Checker", hint: "Alternating tiles from each image. Craters should cross tile edges unbroken." },
-  { id: "overlay", label: "Overlay", hint: "Both at once in mission colours. Grey means agreement; colour fringes are misalignment." },
+  { id: "overlay", label: "Overlay", hint: "Both at once in mission colours, brightness ranges matched. Neutral grey means agreement; saffron or blue fringes mean one image sits off the other." },
   { id: "edges", label: "Edges", hint: "Ridges and crater rims from each image. Overlapping outlines mean a tight fit." },
-  { id: "difference", label: "Difference", hint: "What is left after subtracting one from the other. Dark is agreement." },
+  { id: "difference", label: "Difference", hint: "One subtracted from the other after matching their brightness ranges, so what is left is structural. Dark is agreement; bright outlines are edges that did not land on top of each other." },
   { id: "triptych", label: "Side by side", hint: "Moving, reference and registered result, in that order." },
 ];
 
@@ -44,12 +44,14 @@ function toGray(img, size) {
   ctx.drawImage(img, 0, 0, size, size);
   const d = ctx.getImageData(0, 0, size, size).data;
   const out = new Uint8ClampedArray(size * size);
+  const valid = new Uint8Array(size * size);
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-    // Rec. 601 luma; the patches are already greyscale but the alpha channel
-    // from a warp leaves transparent corners that must read as "no data".
-    out[p] = d[i + 3] < 8 ? 0 : (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+    // The warped patch carries its footprint in alpha: outside it there is no
+    // CH2 data at all, which must never be compared against the reference.
+    valid[p] = d[i + 3] > 8 ? 1 : 0;
+    out[p] = valid[p] ? (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) : 0;
   }
-  return out;
+  return { gray: out, valid };
 }
 
 /** Sobel gradient magnitude -- crater rims and ridges, not brightness. */
@@ -68,6 +70,41 @@ function edges(gray, size) {
     }
   }
   return out;
+}
+
+/**
+ * Put two images on the same radiometric footing over their shared area.
+ *
+ * TMC-2 and NAC are different sensors with different response and different sun
+ * angles, so a raw subtraction is dominated by that offset -- the whole frame
+ * comes out uniformly hot and says nothing about alignment. Matching mean and
+ * spread over the overlapping pixels first leaves structural disagreement,
+ * which is what a difference view is actually for.
+ */
+function matchRadiometry(a, b, valid) {
+  let n = 0, sa = 0, sb = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!valid[i]) continue;
+    n++; sa += a[i]; sb += b[i];
+  }
+  if (!n) return { a, b };
+  const ma = sa / n;
+  const mb = sb / n;
+  let va = 0, vb = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!valid[i]) continue;
+    va += (a[i] - ma) ** 2;
+    vb += (b[i] - mb) ** 2;
+  }
+  const sda = Math.sqrt(va / n) || 1;
+  const sdb = Math.sqrt(vb / n) || 1;
+  const outA = new Uint8ClampedArray(a.length);
+  const outB = new Uint8ClampedArray(b.length);
+  for (let i = 0; i < a.length; i++) {
+    outA[i] = 128 + ((a[i] - ma) / sda) * 48;
+    outB[i] = 128 + ((b[i] - mb) / sdb) * 48;
+  }
+  return { a: outA, b: outB };
 }
 
 function autoGain(channel) {
@@ -120,7 +157,7 @@ export function mountComposite(container, { jobId, patchSize = 1024 }) {
 
   function draw() {
     if (!data) return;
-    const { moving, reference, registered, edgeReg, edgeRef } = data;
+    const { moving, reference, registered, valid, edgeReg, edgeRef } = data;
 
     if (mode === "triptych") {
       // Three panels: what went in, what it was matched against, what came out.
@@ -148,6 +185,12 @@ export function mountComposite(container, { jobId, patchSize = 1024 }) {
     const out = im.data;
     const gainReg = mode === "edges" ? autoGain(edgeReg) : 1;
     const gainRef = mode === "edges" ? autoGain(edgeRef) : 1;
+    // Overlay and difference compare brightness directly, so they need the two
+    // sensors on the same footing first; swipe and checker show each image
+    // as-is and must not be altered.
+    const matched = (mode === "overlay" || mode === "difference")
+      ? matchRadiometry(registered, reference, valid)
+      : null;
     const cellPx = size / cells;
     const splitPx = split * size;
 
@@ -155,9 +198,17 @@ export function mountComposite(container, { jobId, patchSize = 1024 }) {
       for (let x = 0; x < size; x++) {
         const p = y * size + x;
         const i = p * 4;
-        const a = registered[p];      // registered CH2
-        const b = reference[p];       // LROC reference
+        const a = matched ? matched.a[p] : registered[p];   // registered CH2
+        const b = matched ? matched.b[p] : reference[p];    // LROC reference
         let r, g, bl;
+
+        // No CH2 coverage here, so there is nothing to compare. Rendered as a
+        // flat slate rather than a bright difference, which would read as a
+        // catastrophic misalignment that never happened.
+        if (!valid[p] && mode !== "swipe" && mode !== "checker") {
+          out[i] = 22; out[i + 1] = 28; out[i + 2] = 36; out[i + 3] = 255;
+          continue;
+        }
 
         switch (mode) {
           case "swipe": {
@@ -191,11 +242,11 @@ export function mountComposite(container, { jobId, patchSize = 1024 }) {
             break;
           }
           default: {  // difference
+            // Radiometry is already matched, so what is left is structural.
             const d = Math.abs(a - b);
-            // Dark where the two agree, hot where they do not.
-            r = Math.min(255, d * 2.2);
-            g = Math.min(255, d * 1.1);
-            bl = Math.min(255, d * 0.5);
+            r = Math.min(255, d * 3.4);
+            g = Math.min(255, d * 1.7);
+            bl = Math.min(255, d * 0.8);
             break;
           }
         }
@@ -262,14 +313,18 @@ export function mountComposite(container, { jobId, patchSize = 1024 }) {
     loadImage(patchUrl(jobId, "warped")).catch(() => null),
   ])
     .then(([movingImg, refImg, warpedImg]) => {
-      const moving = toGray(movingImg, size);
-      const reference = toGray(refImg, size);
+      const moving = toGray(movingImg, size).gray;
+      const reference = toGray(refImg, size).gray;
       // A failed run has no warped patch; fall back to the unregistered moving
       // image so the comparison still shows what was attempted.
-      const registered = warpedImg ? toGray(warpedImg, size) : moving;
+      const reg = warpedImg
+        ? toGray(warpedImg, size)
+        : { gray: moving, valid: new Uint8Array(size * size).fill(1) };
       data = {
-        moving, reference, registered,
-        edgeReg: edges(registered, size),
+        moving, reference,
+        registered: reg.gray,
+        valid: reg.valid,
+        edgeReg: edges(reg.gray, size),
         edgeRef: edges(reference, size),
       };
       loading.remove();

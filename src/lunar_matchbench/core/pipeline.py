@@ -96,9 +96,19 @@ def _save_raw_patches(ch2, lroc, result: dict, label: str) -> dict:
     cv2.imwrite(str(paths["lroc"]), lroc)
     if result.get("status") == "SUCCESS" and result.get("homography") is not None:
         h, w = lroc.shape[:2]
-        warped = cv2.warpPerspective(ch2, np.array(result["homography"]), (w, h))
+        H = np.array(result["homography"])
+        warped = cv2.warpPerspective(ch2, H, (w, h))
+        # Warping rotates part of the CH2 frame out of view, and warpPerspective
+        # fills that with black. Saved as plain grey it is indistinguishable from
+        # genuinely dark terrain, so an overlay or difference view lights the
+        # whole empty band up as if it were a huge misalignment. Carry the
+        # footprint in the alpha channel instead, so "no data" stays "no data".
+        mask = cv2.warpPerspective(
+            np.full(ch2.shape[:2], 255, np.uint8), H, (w, h), flags=cv2.INTER_NEAREST)
+        rgba = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGRA)
+        rgba[:, :, 3] = mask
         paths["warped"] = out_dir / f"{label}_warped.png"
-        cv2.imwrite(str(paths["warped"]), warped)
+        cv2.imwrite(str(paths["warped"]), rgba)
     return {k: str(v) for k, v in paths.items()}
 
 
