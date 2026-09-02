@@ -1920,3 +1920,48 @@ git commit -m "feat: diagnosis panel and metric readouts; retire the old UI asse
 **Type consistency:** `renderLocator(el, loc)` / `clearLocator(el)`; `mountComparator(container, {jobId, mode}) -> {setMode, setSplit, destroy}`; `mountTiePoints(container, {tiepoints, patchSize}) -> {setFilter, destroy}`; `renderCharts(container, result)`; `patchUrl(jobId, which)`. `fmtMB` is defined once in `main.js` and used by `renderProgress` and `renderDiagnosis`; `charts.js` does not need it.
 
 **Known risk:** `tests/test_ui.py` seeds jobs through `app_mod._store`, reaching past the public API. That is deliberate — it keeps the UI tests offline and deterministic — but it couples them to the job-store shape. If `_store` changes, these tests must change with it.
+
+---
+
+## Execution Record (2026-09-03)
+
+All 7 tasks complete. 14 UI tests + 50 offline tests passing; no horizontal
+overflow at 1440, 900 or 390px.
+
+What real data changed, none of which the plan anticipated:
+
+1. **The tie-point overlay was an unreadable hairball.** 1,280 displacement
+   lines drawn at once. The flow field is now opt-in and hovering draws only the
+   line under the cursor; the points carry the verdict.
+2. **The comparator tags were backwards.** The clip reveals the moving layer
+   from the left edge, so the left of the split is CH2, not LROC — and since
+   colour encodes provenance here, a swapped label is a factual error.
+3. **The residual axis was useless at the 98th percentile.** Rejected matches in
+   a 1024px patch reproject anywhere; p98 for the reference run is 1057 px, which
+   crushed every kept point into one bin. The axis is now scaled to the kept
+   distribution with an explicit labelled overflow bar.
+4. **The three-stage funnel was a fiction.** There is no sequence — only two
+   states of one population — so it became a part-to-whole proportion bar.
+5. **`/api/status` never returned `transfer`.** Plan 1 stored the figures the
+   pipeline reports but did not expose them, so the live byte counter could
+   never have worked. Fixed in `get_status`.
+6. **The base image swallowed every hover.** Its `opacity` creates a stacking
+   context that paints it above the canvas; it needs `pointer-events: none` and
+   an explicit `z-index`, not DOM order.
+7. **Legacy runs printed "0% of 0 lines searched".** Runs recorded before
+   coverage tracking now omit the clause instead of claiming a measurement.
+
+**Palette validation, run rather than eyeballed.** `validate_palette.js` puts
+kept-vs-rejected (`#3FD68C` / `#FF5C5C`) at deutan ΔE **8.5** — above the ≥8
+target but only just, and it FAILs the lightness band. Since that pair carries
+the single most important distinction in the tool, the verdict is never colour
+alone: filled disc vs hollow ring on the canvas and in both legends, and fixed
+stacking order in the histogram.
+
+**Design pass, one thing removed:** the run button is no longer a full-width
+saffron bar. It was the loudest element on the page and competed with the strip
+locator, which is the element this console should be remembered by.
+
+**Deviation from the plan:** Task 5's tests were written against `rect` bars and
+a 3-stage funnel; both changed as described above, and the tests changed with
+them. Stage-wide pan/zoom stays dropped, as recorded in the plan's self-review.
