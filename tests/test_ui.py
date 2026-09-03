@@ -351,3 +351,42 @@ def test_transform_grid_stays_inside_its_box(page, live_server):
         assert b["x"] >= svg["x"] - 2 and b["y"] >= svg["y"] - 2, f"polyline {i} escapes left/top"
         assert b["x"] + b["width"] <= svg["x"] + svg["width"] + 2, f"polyline {i} escapes right"
         assert b["y"] + b["height"] <= svg["y"] + svg["height"] + 2, f"polyline {i} escapes bottom"
+
+
+def test_a_failed_run_never_looks_like_a_successful_one(page, live_server):
+    """The outcome has to outrank where the bytes came from.
+
+    The chip state was `replayed ? "cache" : ok ? ... : "idle"`, so every
+    replayed run wore the same amber chip whether or not it converged, and the
+    failure reason was rendered in `.empty` -- muted grey, the style for
+    "nothing here yet". Loading all four presets, two of which genuinely fail,
+    looked like four successes.
+    """
+    ok = copy.deepcopy(DONE_JOB)
+    ok["replayed"] = True
+    _seed("uitest20", ok)
+    page.goto(f"{live_server}/?job=uitest20", wait_until="networkidle")
+    page.wait_for_selector("#panels:not([hidden])", timeout=15000)
+    good_state = page.locator("#status-chip").get_attribute("data-state")
+    good_colour = page.eval_on_selector(
+        "#status-chip", "el => getComputedStyle(el).color")
+
+    bad = _failed_job()
+    bad["replayed"] = True
+    _seed("uitest21", bad)
+    page.goto(f"{live_server}/?job=uitest21", wait_until="networkidle")
+    page.wait_for_selector("#panels:not([hidden])", timeout=15000)
+    bad_state = page.locator("#status-chip").get_attribute("data-state")
+    bad_colour = page.eval_on_selector(
+        "#status-chip", "el => getComputedStyle(el).color")
+
+    assert bad_state == "failed", f"failed replay reported state {bad_state!r}"
+    assert bad_state != good_state
+    assert bad_colour != good_colour, (
+        f"a failed run renders in the same colour as a successful one: {bad_colour}")
+
+    # And the reason is stated as a result, not whispered as an absence.
+    assert page.locator(".failbox").count() == 1
+    assert "did not converge" in page.inner_text(".failbox").lower()
+    assert page.locator(".diag--bad").count() >= 1
+    assert "DID NOT CONVERGE" in page.inner_text(".diag--bad")

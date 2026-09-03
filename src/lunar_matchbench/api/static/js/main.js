@@ -61,6 +61,19 @@ function renderDiagnosis(container, data) {
   const tx = data.transfer || {};
   const rows = [];
 
+  // The outcome leads. A failure reported only in a muted 12.5px line under
+  // the metrics -- which is what `.empty` is styled for -- reads as "nothing
+  // here yet" rather than "this did not work".
+  if (data.status === "failed") {
+    rows.push(`
+      <div class="diag diag--bad">
+        <span class="eyebrow">Registration</span>
+        <b class="num">DID NOT CONVERGE</b>
+        <span class="diag-detail">No transform was fitted, so there are no metrics.
+          The reason, and the stage it broke down at, are below.</span>
+      </div>`);
+  }
+
   // A recorded run must never be able to pass for a live fetch. This is the
   // first thing in the evidence panel, not a footnote.
   if (data.replayed) {
@@ -129,8 +142,14 @@ function renderDiagnosis(container, data) {
 function renderMetrics(container, data) {
   const m = data.metrics;
   if (!m) {
-    container.innerHTML =
-      `<p class="empty">${data.error || "Registration did not converge."}</p>`;
+    container.innerHTML = `
+      <div class="failbox">
+        <b class="failbox-head">Registration did not converge</b>
+        <p class="failbox-why">${data.error || "No transform could be fitted."}</p>
+        <p class="failbox-note">There are no metrics to report because no transform
+          was fitted. This is a real result, not a broken demo &mdash; the panels below
+          show the stage it broke down at.</p>
+      </div>`;
     return;
   }
   const cells = [
@@ -150,7 +169,12 @@ function renderResult(jobId, data) {
   const replayed = !!data.replayed;
   const fromCache = (data.transfer?.fetched_bytes || 0) === 0
     && (data.transfer?.cached_bytes || 0) > 0;
-  const chipState = replayed ? "cache" : ok ? (fromCache ? "cache" : "live") : "idle";
+  // Outcome outranks provenance. This previously read
+  //   replayed ? "cache" : ok ? ... : "idle"
+  // so every replayed run -- succeeded or not -- got the same amber chip, and
+  // a failure was distinguishable only by reading the label. Where the data
+  // came from is still said, in the text; whether it worked decides the colour.
+  const chipState = !ok ? "failed" : replayed || fromCache ? "cache" : "live";
   const chipText = replayed
     ? (ok ? "Recorded run · succeeded" : "Recorded run · did not converge")
     : ok ? (fromCache ? "Succeeded · from cache" : "Succeeded · live") : "Did not converge";

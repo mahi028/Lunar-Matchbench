@@ -31,6 +31,12 @@
 .chip[data-state="live"] .dot { background: var(--good); }
 .chip[data-state="cache"] { color: var(--warn); }
 .chip[data-state="cache"] .dot { background: var(--warn); }
+/* A run that did not converge must not wear the same colour as one that did.
+   There was no failed state at all: a live failure fell through to "idle"
+   (muted grey) and a recorded failure was forced to "cache" (amber, identical
+   to a recorded success). */
+.chip[data-state="failed"] { color: var(--bad); }
+.chip[data-state="failed"] .dot { background: var(--bad); }
 .chip[data-state="running"] { color: var(--warn); }
 .chip[data-state="running"] .dot { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .2; } }
