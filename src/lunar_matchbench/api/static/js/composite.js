@@ -27,13 +27,31 @@ export const MODES = [
   { id: "triptych", label: "Side by side", hint: "Moving, reference and registered result, in that order." },
 ];
 
+// Every composite mode reads the patch pixels back out of a canvas, so these
+// images have to be CORS-clean, not merely displayable.
+//
+// That distinction bites on the static public build. Hugging Face keeps files
+// above a size threshold in Xet/LFS storage and answers the same-origin
+// `./api/...` request with a 302 to us.aws.cdn.hf.co, so the PNG arrives from a
+// different origin. It renders fine -- and then taints the canvas, and
+// getImageData throws SecurityError, which surfaced as "Patches unavailable for
+// this run" on a run whose patches were sitting right there. Asking for the
+// image with CORS makes the browser honour the CDN's `access-control-allow-origin`
+// and leaves the canvas readable.
+//
+// The fallback matters for anywhere that serves these bytes without CORS
+// headers: crossOrigin would fail the load outright, and a visible-but-tainted
+// image still beats no image at all.
 function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`could not load ${src}`));
-    img.src = src;
-  });
+  const attempt = (useCors) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      if (useCors) img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(`could not load ${src}`));
+      img.src = src;
+    });
+  return attempt(true).catch(() => attempt(false));
 }
 
 function toGray(img, size) {
