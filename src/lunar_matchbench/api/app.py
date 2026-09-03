@@ -12,6 +12,8 @@ GET  /images/{filename}         → serves poster / overlap map PNGs
 """
 from __future__ import annotations
 
+import ctypes
+import gc
 import json
 import threading
 import time
@@ -89,6 +91,32 @@ def _poster_url(path: str) -> str:
     return f"/images/posters/{Path(path).name}"
 
 
+def _release_memory() -> None:
+    """
+    Force Python and glibc to actually hand freed memory back to the OS.
+
+    A single registration allocates and frees hundreds of MB (raw science
+    rasters read during the coarse-to-fine LROC scan, matplotlib figures,
+    torch's CPU working buffers) -- and glibc's allocator does NOT return
+    freed heap pages to the OS on its own once it has claimed them, even
+    with the arena count capped. On an unconstrained host that's invisible;
+    on a memory-limited container it means the process's resident size only
+    ever goes up, and a second registration that would fit fine on its own
+    gets OOM-killed on top of the first one's leftover high-water mark.
+    `gc.collect()` clears any Python-level reference cycles (figures/arrays
+    can have them) first, since glibc can't reclaim memory Python is still
+    holding onto; `malloc_trim(0)` then asks glibc itself to release
+    whatever's left. Only glibc exposes malloc_trim, so this is a no-op
+    (silently) anywhere else -- fine, since the leak this targets is a
+    Linux-container deployment concern, not a local-dev one.
+    """
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
 def _run_pipeline(job_id: str, req: RegisterRequest,
                   credentials: tuple[str, str] | None = None) -> None:
     """Background thread target."""
@@ -135,6 +163,7 @@ def _run_pipeline(job_id: str, req: RegisterRequest,
         _store(job_id, {"status": JobStatus.failed, "error": str(exc)})
     finally:
         _persist(job_id)
+        _release_memory()
 
 
 def _persist(job_id: str) -> None:

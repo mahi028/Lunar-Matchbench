@@ -17,3 +17,7 @@ __pycache__/
 # The baked demo bundle IS tracked: it is what lets a deployment without
 # ISSDC credentials still demonstrate the pipeline.
 !demo/
+# Prototype/exploration scripts -- superseded by the src/lunar_matchbench
+# package, not imported by it, and one file in here carries a hardcoded
+# session credential that must never be committed.
+src_prot/

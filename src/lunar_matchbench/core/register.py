@@ -6,6 +6,7 @@ All state is stateless (pure functions) — safe for concurrent API use.
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 from typing import Literal
@@ -28,6 +29,12 @@ def _get_xfeat():
     global _xfeat
     if _xfeat is None:
         import torch
+        # Explicit cap, not just relying on OMP_NUM_THREADS/env vars -- torch
+        # doesn't always honour those depending on how its CPU backend was
+        # built, and on a constrained (1-2 vCPU) host, capping threads also
+        # limits how many glibc malloc arenas get created, which is the
+        # actual lever against the RSS-climbs-with-every-request pattern.
+        torch.set_num_threads(max(1, os.cpu_count() or 1))
         _xfeat = torch.hub.load(
             "verlab/accelerated_features", "XFeat",
             pretrained=True, top_k=XFEAT_TOP_K, trust_repo=True,

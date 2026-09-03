@@ -9,10 +9,16 @@ import os
 # Walking up from this file lands on the repository root when running from a
 # source checkout -- but on `site-packages` once the package is pip-installed,
 # which is what happens inside the container. Everything writable, and the demo
-# bundle, would then resolve inside the Python installation. LMB_PROJECT_ROOT is
-# how a deployment says where its data actually lives; the Dockerfile sets it.
+# bundle, would then resolve inside the Python installation, so the root has to
+# be stated by the deployment rather than inferred. The Dockerfile sets
+# LMB_PROJECT_ROOT; LUNAR_MATCHBENCH_DATA_ROOT is accepted as an alias so the
+# Railway deployment configured against that name keeps working.
 _SOURCE_ROOT = Path(__file__).resolve().parent.parent.parent
-PROJECT_ROOT = Path(os.environ.get("LMB_PROJECT_ROOT") or _SOURCE_ROOT)
+PROJECT_ROOT = Path(
+    os.environ.get("LMB_PROJECT_ROOT")
+    or os.environ.get("LUNAR_MATCHBENCH_DATA_ROOT")
+    or _SOURCE_ROOT
+)
 DATA_ROOT    = Path(os.environ.get("LMB_DATA_ROOT") or PROJECT_ROOT / "data_store")
 OUTPUT_ROOT  = Path(os.environ.get("LMB_OUTPUT_ROOT") or PROJECT_ROOT / "outputs")
 STATIC_ROOT  = Path(__file__).parent / "api" / "static"

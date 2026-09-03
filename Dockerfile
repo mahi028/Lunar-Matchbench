@@ -53,6 +53,23 @@ ENV PYTHONUNBUFFERED=1 \
     # fetch live.
     LMB_DEMO_ONLY=1
 
+
+# glibc's malloc gives each thread its own memory arena, and on a
+# constrained container those arenas are never handed back to the OS even
+# after the tensors/arrays inside them are freed -- RSS just climbs with
+# every request that spins up native threads (torch/numpy/opencv all do).
+# Capping arenas, plus capping how many threads torch/OpenBLAS/OpenMP get to
+# spin up in the first place, is the standard fix for a Python+numpy/torch
+# container that OOMs after a handful of requests despite a single request's
+# own peak usage staying well under the memory limit. On a 1-2 vCPU host,
+# these don't cost meaningful speed either -- there's little real
+# parallelism to lose.
+ENV MALLOC_ARENA_MAX=2 \
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    OPENBLAS_NUM_THREADS=2
+
+
 EXPOSE 7860
 
 # $PORT is honoured so the same image works on Spaces (7860), Railway and
