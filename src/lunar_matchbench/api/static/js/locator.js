@@ -12,6 +12,8 @@
 // readout into a way to look anywhere inside a half-gigabyte product. Nothing
 // is fetched while the pointer is down, so a long drag costs one request.
 
+import { isStatic } from "./api.js";
+
 const NS = "http://www.w3.org/2000/svg";
 const H = 440;   // strip height in viewBox units
 const W = 24;    // strip width
@@ -162,6 +164,18 @@ export function renderLocator(root, loc, { jobId, onProbe } = {}) {
   }
 
   function showPreview() {
+    // Rendering the strip at an arbitrary line means a ranged read of the
+    // actual LROC product. The static public build has no server to do that,
+    // and a baked run deliberately drops its product reference, so say which
+    // of those it is instead of implying the imagery is missing.
+    if (isStatic()) {
+      probeBox.innerHTML = `
+        <p class="rail-hint num">Line ${probeLineNo.toLocaleString()}</p>
+        <p class="rail-empty">Strip preview needs a live product stream.
+        Run the container to read any line of this 52,224-line strip.</p>`;
+      onProbe?.(probeLineNo);
+      return;
+    }
     probeBox.innerHTML = `
       <p class="rail-hint num">Line ${probeLineNo.toLocaleString()}</p>
       <img class="rail-preview" alt="LROC strip at scan line ${probeLineNo}"

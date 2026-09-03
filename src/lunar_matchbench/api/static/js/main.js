@@ -1,4 +1,4 @@
-import { fetchCapabilities, fetchResult, fetchStatus, startRun } from "./api.js";
+import { fetchCapabilities, fetchResult, fetchStatus, isStatic, startRun } from "./api.js";
 import { clearLocator, renderLocator } from "./locator.js";
 import { MODES, mountComposite } from "./composite.js";
 import { mountTiePoints } from "./tiepoints.js";
@@ -175,6 +175,7 @@ function renderResult(jobId, data) {
   media.appendChild(cmpHost);
   const composite = mountComposite(cmpHost, {
     jobId, patchSize: data.patch_size || 1024,
+    hasWarped: data.status === "done",
   });
   stageTools.onclick = (e) => {
     const btn = e.target.closest(".tool");
@@ -267,6 +268,34 @@ const deployNote = document.getElementById("deploy-note");
 fetchCapabilities().then((caps) => {
   const live = caps.server_credentials;
   const presets = (caps.demo_runs || []).length;
+
+  // The static public build has no server at all, so there is nothing that
+  // could reach ISSDC on a visitor's behalf. Asking for a password that cannot
+  // be used would be worse than useless, so the panel says what to do instead
+  // of collecting a credential it will only reject.
+  if (isStatic()) {
+    deployNote.hidden = false;
+    deployNote.innerHTML = `
+      <span class="eyebrow">This deployment</span>
+      <p>Runs the <b>${presets} preset coordinate${presets === 1 ? "" : "s"}</b> from
+      recorded results, so you can see the whole pipeline without an account. Those
+      are real runs against the live archives &mdash; only the fetching is cached.</p>`;
+    account.hidden = false;
+    account.open = false;
+    account.innerHTML = `
+      <summary>Run any coordinate live</summary>
+      <p class="account-lede">
+        This is the static public build: a page and the recorded runs, with no
+        server behind it. Registering an arbitrary coordinate means streaming
+        from ISRO&rsquo;s ISSDC archive and NASA&rsquo;s LROC archive, which needs
+        a running backend and an ISSDC account of your own.</p>
+      <p class="account-lede">Run the container to do that:</p>
+      <pre class="account-cmd"><code>docker run -p 7860:7860 -e LMB_DEMO_ONLY=0 -e PRADAN_USERNAME=&lt;you&gt; -e PRADAN_PASSWORD=&lt;secret&gt; lunar-matchbench</code></pre>
+      <p class="account-lede">
+        No account? <a href="https://pradan.issdc.gov.in/" target="_blank"
+        rel="noopener">Register at ISSDC PRADAN</a>.</p>`;
+    return;
+  }
 
   // A visitor can always supply their own account; the panel is only opened by
   // default when the deployment has none of its own, because that is when it is

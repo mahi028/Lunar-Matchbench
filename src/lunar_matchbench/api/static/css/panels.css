@@ -218,3 +218,17 @@
 /* A recorded run announces itself before any number it produced. */
 .diag--replay { border-left-color: var(--warn); }
 .diag--replay b { color: var(--warn); }
+
+/* Shown only by the static public build, where there is no backend to run a
+   live coordinate against and the answer is a command rather than a form. */
+.account-cmd {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font: 500 12px/1.6 var(--mono);
+  color: var(--signal);
+  white-space: pre;
+}

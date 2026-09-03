@@ -21,3 +21,6 @@ __pycache__/
 # package, not imported by it, and one file in here carries a hardcoded
 # session credential that must never be committed.
 src_prot/
+
+# Built by scripts/build_static_site.py; regenerate rather than commit.
+site/

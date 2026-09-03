@@ -6,7 +6,7 @@ colorTo: indigo
 sdk: docker
 app_port: 7860
 pinned: false
-short_description: Cross-mission lunar image registration, Chandrayaan-2 to LROC NAC
+short_description: Chandrayaan-2 to LROC NAC image registration
 ---
 
 # Lunar-MatchBench 🌕

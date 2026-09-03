@@ -114,7 +114,7 @@ function autoGain(channel) {
   return 235 / hi;
 }
 
-export function mountComposite(container, { jobId, patchSize = 1024 }) {
+export function mountComposite(container, { jobId, patchSize = 1024, hasWarped = true }) {
   const size = patchSize;
   container.innerHTML = `
     <div class="cmp" data-mode="swipe" style="--split:.5">
@@ -310,7 +310,10 @@ export function mountComposite(container, { jobId, patchSize = 1024 }) {
   Promise.all([
     loadImage(patchUrl(jobId, "ch2")),
     loadImage(patchUrl(jobId, "lroc")),
-    loadImage(patchUrl(jobId, "warped")).catch(() => null),
+    // A run that never converged produced no warped patch. Asking for one
+    // anyway is a guaranteed 404 -- harmless, but it puts a red error in
+    // the console of a public page for something working as intended.
+    hasWarped ? loadImage(patchUrl(jobId, "warped")).catch(() => null) : null,
   ])
     .then(([movingImg, refImg, warpedImg]) => {
       const moving = toGray(movingImg, size).gray;

@@ -15,9 +15,9 @@ This build is designed so you do not have to.
 
 | Deployment | `PRADAN_*` set? | What a visitor can do |
 |---|---|---|
-| **Public demo** *(recommended)* | **No** | Run the four preset coordinates, replayed from recorded runs. Any other coordinate needs their own account. |
-| Private / local | Yes, `LMB_DEMO_ONLY=0` | Any coordinate, live, on your account. |
-| Public + visitor accounts | No | Presets from cache; any coordinate live once the visitor enters their own ISSDC login. |
+| **Public static Space** *(what is live today)* | **No** — cannot use them | Run the four preset coordinates, replayed from recorded runs. Anything else points at the container. |
+| Public container | **No** | Presets from cache; any coordinate live once the visitor enters their own ISSDC login. |
+| Private / local container | Yes, `LMB_DEMO_ONLY=0` | Any coordinate, live, on your account. |
 
 `LMB_DEMO_ONLY=1` is the **default in the container image**, so a public deploy
 is safe even if a credential reaches the environment by accident. Turn it off
@@ -49,47 +49,79 @@ uv run lunar-matchbench bake-demo --instrument tmc --matcher xfeat
 
 ---
 
-## Hugging Face Spaces (recommended)
+## Hugging Face Spaces (what the public link runs)
 
-Free, 2 vCPU and 16 GB RAM, a permanent public URL, no payment details, and
-Docker is a first-class option. The repo is already configured for it: the
-front matter at the top of `README.md` declares `sdk: docker` and
-`app_port: 7860`, and the Dockerfile binds that port and runs as uid 1000.
+**Docker Spaces are not free.** As of September 2026 hosting a Docker or Gradio
+Space on `cpu-basic` requires a PRO subscription; only **static** Spaces are free.
+Creating one without PRO fails with `402 Payment Required`. Earlier versions of
+this document said Docker Spaces were free. They were; they are not now.
 
-1. Sign in at <https://huggingface.co> and go to **New → Space**.
-2. Name it (for example `lunar-matchbench`), pick **Docker → Blank**, and set
-   visibility **Public**.
-3. Create it, then push this repository to the Space's git remote:
+So the public deployment is a **static build**, and the container remains the way
+to run anything live.
 
-   ```
-   git remote add space https://huggingface.co/spaces/<your-username>/lunar-matchbench
-   git push space feat/streaming-and-interactive-ui:main
-   ```
+### The static build
 
-   HF asks for your username and an access token as the password. Create the
-   token at <https://huggingface.co/settings/tokens> with **write** scope. Use a
-   token, not your account password.
-4. The Space builds automatically. First build takes roughly 5–10 minutes
-   because of the PyTorch wheel; later pushes reuse the layer cache.
-
-Your URL will be:
+The four baked runs need no server to replay - they are JSON and PNGs - so the
+whole console runs in the browser:
 
 ```
-https://huggingface.co/spaces/<your-username>/lunar-matchbench
+uv run python scripts/build_static_site.py
 ```
 
-**Do not add `PRADAN_USERNAME` or `PRADAN_PASSWORD` as Space secrets.** The
-image already defaults to demo mode; adding them would put your account behind
-a public button.
+That writes `site/` (about 6.4 MB). The API responses in it are not
+reimplemented in JavaScript: the script drives the real FastAPI app through its
+real endpoints in demo-only mode and records what it returned, so the static
+site serves the server's own answers. `api.js` reads files instead of making
+requests when `window.LMB_STATIC_BASE` is set, which `index.html` does only in
+this build.
 
-### Verifying the deployment
+What the static build cannot do, and says so on the page rather than failing
+quietly:
 
-- The landing panel says the deployment runs the preset coordinates from
-  recorded results.
-- Clicking **Oceanus Procellarum → Run registration** completes and shows
-  `Recorded run · succeeded` in the status chip.
-- Clicking **Sinus Aestuum** completes and reports a genuine mismatch.
-- Typing an arbitrary coordinate is refused with an explanation.
+- run an arbitrary coordinate (no server can reach ISSDC)
+- accept visitor ISSDC credentials (same reason - the panel shows the container
+  command instead of collecting a password it cannot use)
+- render the draggable strip preview at an arbitrary scan line (that is a ranged
+  read of a 529 MB product)
+
+Everything else - the presets, metrics, tie-points, composites, charts, transform
+decomposition, footprint map - is fully present.
+
+### Publishing it
+
+```
+uv run python scripts/build_static_site.py
+hf auth login                      # device flow; the token never lands in a shell
+```
+
+Then create the Space with `sdk: static` and upload `site/`. `site/README.md`
+carries the front matter Spaces reads. `huggingface_hub`'s `upload_folder` does
+both:
+
+```python
+from huggingface_hub import HfApi
+api = HfApi()
+sid = f"{api.whoami()['name']}/lunar-matchbench"
+api.create_repo(sid, repo_type="space", space_sdk="static", exist_ok=True)
+api.upload_folder(repo_id=sid, repo_type="space", folder_path="site")
+```
+
+Live at:
+
+- <https://huggingface.co/spaces/Nitya-Prakash-Pandey/lunar-matchbench>
+- <https://nitya-prakash-pandey-lunar-matchbench.static.hf.space> (direct)
+
+Rebuild and re-upload after any UI or demo-bundle change; the bundle is a
+snapshot, not a live view of the source.
+
+**Do not add `PRADAN_USERNAME` or `PRADAN_PASSWORD` as Space secrets.** A static
+Space cannot use them, and a Docker one must not.
+
+### If you do get PRO
+
+The Dockerfile already targets Spaces (uid 1000, `$PORT`, `LMB_DEMO_ONLY=1`).
+Push the repo to the Space's git remote and it runs with the live-credentials
+panel working.
 
 ## Railway
 
@@ -140,3 +172,6 @@ docker run --rm -p 7860:7860 \
 - [ ] HTTPS if the visitor-credentials panel is reachable — Spaces and Railway
       both provide it
 - [ ] `uv run pytest` green
+- [ ] for the static Space: `site/` rebuilt from the current source, and the
+      published page checked in a browser (a preset run, a failing preset, and a
+      non-preset coordinate) rather than only fetched
