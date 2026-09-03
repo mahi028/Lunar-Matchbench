@@ -135,6 +135,7 @@ def run_pipeline(
     matcher: str = "xfeat",
     job_id: str | None = None,
     progress_cb=None,
+    credentials: tuple[str, str] | None = None,
 ) -> dict:
     """
     Full registration pipeline.
@@ -191,7 +192,8 @@ def run_pipeline(
 
         try:
             _, zstream = fetch_ch2_streamed(lat, lon, instrument,
-                                            progress_cb=_fetch_cb, budget=budget)
+                                            progress_cb=_fetch_cb, budget=budget,
+                                            credentials=credentials)
         except Ch2FetchError as exc:
             return {"status": "FAILED", "reason": f"Could not fetch Chandrayaan-2 data from ISSDC: {exc}"}
         except TransferBudgetExceeded as exc:

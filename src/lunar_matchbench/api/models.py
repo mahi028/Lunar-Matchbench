@@ -22,6 +22,12 @@ class RegisterRequest(BaseModel):
     lon:        float      = Field(..., ge=0,   le=360, description="Target longitude (°E, 0-360)")
     instrument: Instrument = Field(Instrument.tmc, description="CH2 source instrument")
     matcher:    Matcher    = Field(Matcher.xfeat,  description="Feature matcher")
+    # A visitor's own ISSDC account, used for this request only. Never written
+    # to disk, never logged, and never persisted into the job record -- a public
+    # deployment must not run every stranger's registration on one operator's
+    # credentials, and must not accumulate anyone else's either.
+    issdc_username: Optional[str] = Field(None, exclude=True, repr=False)
+    issdc_password: Optional[str] = Field(None, exclude=True, repr=False)
 
 
 class JobStatus(str, Enum):
@@ -81,6 +87,9 @@ class RegistrationResult(BaseModel):
     error:            Optional[str]           = None
     # Interactive-view payload: the browser composites and draws these itself
     # rather than receiving a pre-rendered picture of the answer.
+    # True when the run was replayed from the baked demo bundle rather than
+      # fetched. Real data, cached fetching -- and always surfaced.
+    replayed:         bool                    = False
     tiepoints:        Optional[TiePoints]     = None
     homography:       Optional[list[list[float]]] = None
     patch_size:       Optional[int]           = None

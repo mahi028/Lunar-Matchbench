@@ -257,3 +257,112 @@ def test_finished_jobs_survive_a_restart(tmp_path, monkeypatch):
     data = client.get("/api/result/revived").json()
     assert data["status"] == "done"
     assert data["metrics"]["n_inliers"] == 7
+
+
+def test_visitor_credentials_never_reach_the_stored_job(monkeypatch, tmp_path):
+    """A visitor's password must not land in the job record or on disk.
+
+    The job store is persisted to outputs/jobs, so anything kept on the request
+    would be written to a file and served back out of /api/result.
+    """
+    import json
+
+    from lunar_matchbench.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "JOB_DIR", tmp_path)
+    seen = {}
+
+    def _stub(*args, **kwargs):
+        seen["credentials"] = kwargs.get("credentials")
+        return {"status": "FAILED", "reason": "stubbed", "step_images": {}}
+
+    import lunar_matchbench.core.pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod, "run_pipeline", _stub)
+
+    resp = client.post("/api/register", json={
+        "lat": 15.0, "lon": 289.2, "instrument": "tmc", "matcher": "xfeat",
+        "issdc_username": "someone", "issdc_password": "hunter2-secret",
+    })
+    assert resp.status_code == 202
+    job_id = resp.json()["job_id"]
+
+    # It must reach the pipeline...
+    assert seen["credentials"] == ("someone", "hunter2-secret")
+
+    # ...and nowhere else.
+    stored = json.dumps(app_mod._read(job_id), default=str)
+    assert "hunter2-secret" not in stored
+    assert "someone" not in stored
+    for path in tmp_path.glob("*.json"):
+        assert "hunter2-secret" not in path.read_text(encoding="utf-8")
+
+    body = client.get(f"/api/result/{job_id}").text
+    assert "hunter2-secret" not in body
+
+
+def test_capabilities_reports_what_this_deployment_can_do():
+    data = client.get("/api/capabilities").json()
+    assert "server_credentials" in data
+    assert isinstance(data["demo_runs"], list)
+
+
+def test_preset_replays_when_the_deployment_has_no_account(monkeypatch):
+    """Without credentials a preset must still run, from the baked bundle."""
+    from lunar_matchbench.api import app as app_mod
+    from lunar_matchbench.core import demo
+
+    monkeypatch.setattr(app_mod, "have_server_credentials", lambda: False)
+    monkeypatch.setattr(demo, "find", lambda *a, **k: {"slug": "demo-x"})
+    monkeypatch.setattr(app_mod.demo, "find", lambda *a, **k: {"slug": "demo-x"})
+    monkeypatch.setattr(app_mod.demo, "load", lambda slug: {
+        "status": "done",
+        "progress_steps": [{"step": 1, "msg": "Locating...", "transfer": {}}],
+        "result": {"metrics": {
+            "matcher": "XFEAT", "n_inliers": 5, "n_raw_matches": 9,
+            "inlier_ratio_pct": 55.6, "rmse_px": 1.2,
+            "spatial_uniformity": 0.5, "elapsed_sec": 1.0,
+        }},
+        "baked_at": "2026-09-03T00:00:00+00:00",
+    })
+    monkeypatch.setattr(app_mod.time, "sleep", lambda *_: None)
+
+    resp = client.post("/api/register", json={
+        "lat": 15.0, "lon": 289.2, "instrument": "tmc", "matcher": "xfeat"})
+    assert resp.status_code == 202
+    data = client.get(f"/api/result/{resp.json()['job_id']}").json()
+    assert data["status"] == "done"
+    # A cached run must never be able to present itself as a live fetch.
+    assert data["replayed"] is True
+
+
+def test_non_preset_is_refused_without_any_account(monkeypatch):
+    from lunar_matchbench.api import app as app_mod
+
+    monkeypatch.setattr(app_mod, "have_server_credentials", lambda: False)
+    monkeypatch.setattr(app_mod.demo, "find", lambda *a, **k: None)
+
+    resp = client.post("/api/register", json={
+        "lat": -42.0, "lon": 12.0, "instrument": "tmc", "matcher": "xfeat"})
+    assert resp.status_code == 400
+    assert "your own ISSDC credentials" in resp.json()["detail"]
+
+
+def test_demo_only_switch_disables_server_credentials(monkeypatch):
+    """load_dotenv() searches upward from the package, not the working directory,
+    so a stray .env above the install is found wherever the process runs.
+    Unsetting env vars is therefore not a guarantee; this switch is."""
+    from lunar_matchbench.core.ch2_fetch import have_server_credentials
+
+    monkeypatch.setenv("PRADAN_USERNAME", "someone")
+    monkeypatch.setenv("PRADAN_PASSWORD", "something")
+    assert have_server_credentials() is True
+
+    monkeypatch.setenv("LMB_DEMO_ONLY", "1")
+    assert have_server_credentials() is False
+
+
+def test_demo_only_still_allows_visitor_credentials(monkeypatch):
+    from lunar_matchbench.core.ch2_fetch import _get_credentials
+
+    monkeypatch.setenv("LMB_DEMO_ONLY", "1")
+    assert _get_credentials(("visitor", "their-own-pass")) == ("visitor", "their-own-pass")

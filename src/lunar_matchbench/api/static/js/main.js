@@ -1,4 +1,4 @@
-import { fetchResult, fetchStatus, startRun } from "./api.js";
+import { fetchCapabilities, fetchResult, fetchStatus, startRun } from "./api.js";
 import { clearLocator, renderLocator } from "./locator.js";
 import { MODES, mountComposite } from "./composite.js";
 import { mountTiePoints } from "./tiepoints.js";
@@ -60,6 +60,20 @@ function renderDiagnosis(container, data) {
   const loc = data?.provenance?.lroc_localization;
   const tx = data.transfer || {};
   const rows = [];
+
+  // A recorded run must never be able to pass for a live fetch. This is the
+  // first thing in the evidence panel, not a footnote.
+  if (data.replayed) {
+    rows.push(`
+      <div class="diag diag--replay">
+        <span class="eyebrow">Recorded run</span>
+        <b class="num">CACHED</b>
+        <span class="diag-detail">Every figure below is real output from an actual run
+          against ISSDC and NASA. This deployment has no ISSDC account, so the fetching
+          was done in advance rather than just now. Add your own account to run any
+          coordinate live.</span>
+      </div>`);
+  }
 
   if (loc) {
     const ok = loc.confident;
@@ -133,12 +147,14 @@ function renderMetrics(container, data) {
 
 function renderResult(jobId, data) {
   const ok = data.status === "done" && data.metrics;
+  const replayed = !!data.replayed;
   const fromCache = (data.transfer?.fetched_bytes || 0) === 0
     && (data.transfer?.cached_bytes || 0) > 0;
-  setChip(
-    ok ? (fromCache ? "cache" : "live") : "idle",
-    ok ? (fromCache ? "Succeeded · from cache" : "Succeeded · live") : "Did not converge",
-  );
+  const chipState = replayed ? "cache" : ok ? (fromCache ? "cache" : "live") : "idle";
+  const chipText = replayed
+    ? (ok ? "Recorded run · succeeded" : "Recorded run · did not converge")
+    : ok ? (fromCache ? "Succeeded · from cache" : "Succeeded · live") : "Did not converge";
+  setChip(chipState, chipText);
 
   renderLocator(locator, data?.provenance?.lroc_localization, { jobId });
   if (intro) intro.hidden = true;
@@ -223,6 +239,8 @@ form.addEventListener("submit", async (e) => {
       lon: parseFloat(document.getElementById("lon").value),
       instrument: document.getElementById("instrument").value,
       matcher: document.getElementById("matcher").value,
+      username: document.getElementById("issdc-user")?.value.trim(),
+      password: document.getElementById("issdc-pass")?.value,
     });
     history.replaceState(null, "", `?job=${job_id}`);
     await poll(job_id);
@@ -242,6 +260,43 @@ document.querySelectorAll(".preset").forEach((btn) => {
 // Rehydrating from ?job= makes a finished run linkable and survivable across a
 // reload, and is how the UI tests drive real payloads without touching the
 // network.
+// ── deployment mode ─────────────────────────────────────────────────────────
+const account = document.getElementById("account");
+const deployNote = document.getElementById("deploy-note");
+
+fetchCapabilities().then((caps) => {
+  const live = caps.server_credentials;
+  const presets = (caps.demo_runs || []).length;
+
+  // A visitor can always supply their own account; the panel is only opened by
+  // default when the deployment has none of its own, because that is when it is
+  // the difference between running a coordinate and not.
+  account.hidden = false;
+  account.open = !live;
+
+  if (!live) {
+    deployNote.hidden = false;
+    deployNote.innerHTML = `
+      <span class="eyebrow">This deployment</span>
+      <p>Runs the <b>${presets} preset coordinate${presets === 1 ? "" : "s"}</b> from
+      recorded results, so you can see the whole pipeline without an account. Those
+      are real runs against the live archives &mdash; only the fetching is cached.
+      For any other coordinate, add your own ISSDC account below.</p>`;
+  }
+
+  // Passwords over plain HTTP are readable in transit. Local development is
+  // fine; a deployed instance is not.
+  const insecure = location.protocol !== "https:"
+    && !["localhost", "127.0.0.1"].includes(location.hostname);
+  if (insecure) {
+    const warn = document.getElementById("account-warn");
+    warn.hidden = false;
+    warn.textContent =
+      "This page is not served over HTTPS, so anything typed here could be read in "
+      + "transit. Do not enter your ISSDC password until the site uses HTTPS.";
+  }
+}).catch(() => { /* capabilities are advisory; the form still works */ });
+
 const jobFromUrl = new URLSearchParams(location.search).get("job");
 if (jobFromUrl) {
   fetchStatus(jobFromUrl)

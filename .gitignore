@@ -13,3 +13,7 @@ outputs/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# The baked demo bundle IS tracked: it is what lets a deployment without
+# ISSDC credentials still demonstrate the pipeline.
+!demo/

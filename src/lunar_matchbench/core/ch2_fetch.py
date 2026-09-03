@@ -51,7 +51,27 @@ class Ch2FetchError(RuntimeError):
     """Raised for credential/login/query failures (vs. a plain 'nothing found')."""
 
 
-def _get_credentials() -> tuple[str, str]:
+def _get_credentials(override: tuple[str, str] | None = None) -> tuple[str, str]:
+    """Credentials for an ISSDC session.
+
+    An explicit pair wins, so a visitor can run against their own account
+    without the deployment needing one at all.
+    """
+    if override and override[0] and override[1]:
+        return override[0], override[1]
+
+    # An explicit switch an operator can rely on. load_dotenv() searches upward
+    # from this module's own directory, not the working directory, so a stray
+    # .env anywhere above the package is picked up no matter where the process
+    # runs -- "just do not set the environment variables" is not a guarantee.
+    # This is, and it is what a public deployment should set.
+    if os.environ.get("LMB_DEMO_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise Ch2FetchError(
+            "This deployment is in demo-only mode (LMB_DEMO_ONLY is set), so it "
+            "does not use a server ISSDC account. Supply your own credentials to "
+            "run a coordinate live."
+        )
+
     def _read():
         user = os.environ.get("PRADAN_USERNAME") or os.environ.get("PRADAN_USER")
         password = os.environ.get("PRADAN_PASSWORD") or os.environ.get("PRADAN_PASS")
@@ -340,6 +360,7 @@ def _resolve_first_reachable(pradan_session, candidates, progress_cb=None):
 def fetch_ch2_streamed(
     lat: float, lon: float, instrument: str,
     bbox: float = 0.2, progress_cb: ProgressCB | None = None, budget=None,
+    credentials: tuple[str, str] | None = None,
 ):
     """Open a CH2 product as a remote ZIP without downloading it.
 
@@ -353,7 +374,7 @@ def fetch_ch2_streamed(
     """
     from lunar_matchbench.core.streaming import Ch2ZipStream
 
-    username, password = _get_credentials()
+    username, password = _get_credentials(credentials)
     wfs_session = _IssdcSession(WFS_TRIGGER_URL, WFS_TRIGGER_URL, "chmapbrowse",
                                 username, password)
     pradan_session = _IssdcSession(PRADAN_TRIGGER_URL, PRADAN_TRIGGER_URL, "pradan",
@@ -368,6 +389,15 @@ def fetch_ch2_streamed(
         progress_cb("stream", filename)
     return filename, Ch2ZipStream.open(url, session=pradan_session.session,
                                        budget=budget)
+
+
+def have_server_credentials() -> bool:
+    """Whether this deployment can fetch on its own account."""
+    try:
+        _get_credentials()
+        return True
+    except Ch2FetchError:
+        return False
 
 
 def fetch_ch2_product(

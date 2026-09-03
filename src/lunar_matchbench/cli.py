@@ -28,6 +28,14 @@ WARM_PRESETS = [
     (3.613415864967716, 289.12239203822105),
 ]
 
+# The labels the console shows, paired with their slugs in the demo bundle.
+PRESET_LABELS = {
+    (15.0, 289.2): ("oceanus-procellarum", "Oceanus Procellarum"),
+    (10.2, 289.5): ("sinus-aestuum", "Sinus Aestuum"),
+    (5.17879877, 288.954173): ("rayed-crater-5n", "Rayed crater 5.2\u00b0N"),
+    (3.613415864967716, 289.12239203822105): ("known-failure-3n", "Known failure 3.6\u00b0N"),
+}
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -42,6 +50,13 @@ def main():
     p_reg.add_argument("--lon", type=float, default=289.2, help="Target longitude (degrees E, default: 289.2)")
     p_reg.add_argument("--instrument", choices=["tmc", "ohrc"], default="tmc", help="CH2 source instrument (default: tmc)")
     p_reg.add_argument("--matcher", choices=["xfeat", "sift"], default="xfeat", help="Feature matcher (default: xfeat)")
+
+    # Sub-command: bake-demo
+    p_bake = subparsers.add_parser(
+        "bake-demo",
+        help="Run every preset and record it so a credential-less deployment can replay it")
+    p_bake.add_argument("--instrument", choices=["tmc", "ohrc"], default="tmc")
+    p_bake.add_argument("--matcher", choices=["xfeat", "sift"], default="xfeat")
 
     # Sub-command: warm
     p_warm = subparsers.add_parser("warm", help="Pre-fetch preset coordinates into the range cache")
@@ -63,6 +78,67 @@ def main():
         print(f"  Starting Lunar-MatchBench Web UI at http://{args.host}:{args.port}")
         print(f"=======================================================\n")
         uvicorn.run("lunar_matchbench.api.app:app", host=args.host, port=args.port, reload=args.reload)
+
+    elif args.command == "bake-demo":
+        import datetime
+        import json
+
+        from lunar_matchbench.core import demo
+        from lunar_matchbench.core.pipeline import run_pipeline
+
+        print("")
+        print(f"Baking {len(WARM_PRESETS)} preset runs for offline replay")
+        print("Each is a real run against the live archives; only the fetching is cached.")
+        print("")
+
+        entries = []
+        for lat, lon in WARM_PRESETS:
+            slug, label = PRESET_LABELS[(lat, lon)]
+            print(f"  {label:<26} {lat:>10.5f} N {lon:>11.5f} E ... ", end="", flush=True)
+
+            recorded = []
+
+            def _cb(step, total, msg, step_images=None, transfer=None, _rec=recorded):
+                _rec.append({"step": step, "msg": msg, "transfer": dict(transfer or {})})
+
+            try:
+                res = run_pipeline(lat=lat, lon=lon, instrument=args.instrument,
+                                   matcher=args.matcher, job_id=slug, progress_cb=_cb)
+            except Exception as exc:
+                print(f"SKIPPED ({type(exc).__name__}: {exc})")
+                continue
+
+            status = "done" if res.get("status") == "SUCCESS" else "failed"
+            entry = {
+                "slug": slug, "label": label,
+                "lat": lat, "lon": lon,
+                "instrument": args.instrument, "matcher": args.matcher,
+                "status": status,
+                "baked_at": datetime.datetime.now(datetime.timezone.utc)
+                                    .isoformat(timespec="seconds"),
+            }
+            demo.bake(
+                {"status": status, "error": res.get("reason"),
+                 "progress_steps": recorded, "result": res},
+                entry,
+                poster_dir=None,
+                overlap_path=res.get("overlap_map_path"),
+            )
+            entries.append(entry)
+
+            metrics = res.get("metrics") or {}
+            if status == "done":
+                print(f"SUCCESS  {metrics.get('n_inliers')} inliers, "
+                      f"RMSE {metrics.get('rmse_px')} px")
+            else:
+                print(f"FAILED   {(res.get('reason') or '')[:58]}")
+
+        demo.DEMO_DIR.mkdir(parents=True, exist_ok=True)
+        demo.MANIFEST.write_text(json.dumps({"runs": entries}, indent=1), encoding="utf-8")
+        print("")
+        print(f"Wrote {len(entries)} runs to {demo.DEMO_DIR}")
+        print("A deployment with no ISSDC account will replay these for the presets.")
+        print("")
 
     elif args.command == "warm":
         from lunar_matchbench.core.pipeline import run_pipeline

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Literal
@@ -27,6 +28,8 @@ from lunar_matchbench.api.models import (
     RegisterRequest, JobResponse, JobStatus, RegistrationResult, MetricsResult,
     TiePoints, TransferStats,
 )
+from lunar_matchbench.core import demo
+from lunar_matchbench.core.ch2_fetch import have_server_credentials
 from lunar_matchbench.config import (
     POSTER_DIR, OVERLAP_DIR, JOB_DIR, PATCH_SIZE, ensure_dirs,
 )
@@ -86,7 +89,8 @@ def _poster_url(path: str) -> str:
     return f"/images/posters/{Path(path).name}"
 
 
-def _run_pipeline(job_id: str, req: RegisterRequest) -> None:
+def _run_pipeline(job_id: str, req: RegisterRequest,
+                  credentials: tuple[str, str] | None = None) -> None:
     """Background thread target."""
     _store(job_id, {"status": JobStatus.running})
     try:
@@ -96,6 +100,12 @@ def _run_pipeline(job_id: str, req: RegisterRequest) -> None:
             data = {"progress_msg": msg, "progress_step": step}
             if transfer:
                 data["transfer"] = transfer
+            # Kept so a baked run can replay the narration it actually produced,
+            # rather than a script written after the fact.
+            job = _read(job_id) or {}
+            data["progress_steps"] = (job.get("progress_steps") or []) + [
+                {"step": step, "msg": msg, "transfer": dict(transfer or {})}
+            ]
             if step_images:
                 data["step_image_urls"] = {k: _poster_url(v) for k, v in step_images.items()}
             _store(job_id, data)
@@ -106,6 +116,7 @@ def _run_pipeline(job_id: str, req: RegisterRequest) -> None:
             matcher=req.matcher.value,
             job_id=job_id,
             progress_cb=_cb,
+            credentials=credentials,
         )
         if result["status"] == "SUCCESS":
             _store(job_id, {
@@ -160,6 +171,52 @@ def _tiepoints_from(reg: dict) -> TiePoints | None:
     )
 
 
+def _replay_demo(job_id: str, entry: dict) -> None:
+    """Walk a baked run through the same lifecycle a live one uses.
+
+    The steps and their messages are the ones that run actually emitted, paced
+    out so the console's progress view behaves identically. The data is real;
+    only the fetching is cached, and the result carries `replayed` so the UI
+    always says so.
+    """
+    record = demo.load(entry["slug"])
+    if record is None:
+        _store(job_id, {"status": JobStatus.failed,
+                        "error": "This demo run is not available in this deployment."})
+        return
+
+    steps = record.get("progress_steps") or []
+    for entryStep in steps:
+        _store(job_id, {
+            "status": JobStatus.running,
+            "progress_step": entryStep.get("step", 0),
+            "progress_msg": entryStep.get("msg", ""),
+            "transfer": entryStep.get("transfer", {}),
+        })
+        time.sleep(0.45)
+
+    result = record.get("result") or {}
+    _store(job_id, {
+        "status": JobStatus.done if record.get("status") == "done" else JobStatus.failed,
+        "error": record.get("error"),
+        "result": result,
+        "replayed": True,
+        "replay_baked_at": record.get("baked_at", ""),
+        "transfer": result.get("transfer", {}),
+        "step_image_urls": {},
+    })
+    _persist(job_id)
+
+
+@app.get("/api/capabilities")
+async def capabilities():
+    """What this deployment can do, so the UI can explain itself accurately."""
+    return {
+        "server_credentials": have_server_credentials(),
+        "demo_runs": demo.available(),
+    }
+
+
 # ── Routes ─────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -171,8 +228,34 @@ async def serve_ui():
 @app.post("/api/register", response_model=JobResponse, status_code=202)
 async def start_registration(req: RegisterRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())[:8]
-    _store(job_id, {"status": JobStatus.queued, "request": req.model_dump()})
-    background_tasks.add_task(_run_pipeline, job_id, req)
+    # model_dump() would carry the visitor's password into the stored job and
+    # from there onto disk. The credential fields are excluded from the model,
+    # but this is belt-and-braces: they are read once and never stored.
+    stored_request = req.model_dump(exclude={"issdc_username", "issdc_password"})
+    _store(job_id, {"status": JobStatus.queued, "request": stored_request})
+
+    visitor_creds = (
+        (req.issdc_username, req.issdc_password)
+        if req.issdc_username and req.issdc_password else None
+    )
+
+    # A visitor's own account always runs live. Otherwise a preset falls back to
+    # its baked run, which is what lets a public deployment demonstrate the
+    # pipeline without spending one operator's ISSDC account on every stranger.
+    if visitor_creds is None:
+        baked = demo.find(req.lat, req.lon, req.instrument.value, req.matcher.value)
+        if baked is not None and not have_server_credentials():
+            background_tasks.add_task(_replay_demo, job_id, baked)
+            return JobResponse(job_id=job_id, status=JobStatus.queued)
+        if baked is None and not have_server_credentials():
+            raise HTTPException(
+                status_code=400,
+                detail=("This deployment has no ISSDC account, so it can only replay "
+                        "the preset coordinates. Enter your own ISSDC credentials to "
+                        "run any coordinate live."),
+            )
+
+    background_tasks.add_task(_run_pipeline, job_id, req, visitor_creds)
     return JobResponse(job_id=job_id, status=JobStatus.queued)
 
 
@@ -217,6 +300,7 @@ async def get_result(job_id: str):
         homography      = reg.get("homography"),
         patch_size      = PATCH_SIZE,
         transfer        = TransferStats(**(r.get("transfer") or {})),
+        replayed        = bool(job.get("replayed")),
     )
 
     if job["status"] == JobStatus.failed:

@@ -214,3 +214,7 @@
 .cmp-ctl[hidden] { display: none; }
 .cmp-ctl input[type="range"] { flex: 1; max-width: 200px; accent-color: var(--nasa); }
 .cmp-hint { font-size: 11.5px; color: var(--muted); line-height: 1.55; max-width: 60ch; }
+
+/* A recorded run announces itself before any number it produced. */
+.diag--replay { border-left-color: var(--warn); }
+.diag--replay b { color: var(--warn); }

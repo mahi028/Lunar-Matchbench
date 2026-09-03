@@ -1,0 +1,44 @@
+{
+ "runs": [
+  {
+   "slug": "oceanus-procellarum",
+   "label": "Oceanus Procellarum",
+   "lat": 15.0,
+   "lon": 289.2,
+   "instrument": "tmc",
+   "matcher": "xfeat",
+   "status": "done",
+   "baked_at": "2026-09-02T22:26:55+00:00"
+  },
+  {
+   "slug": "sinus-aestuum",
+   "label": "Sinus Aestuum",
+   "lat": 10.2,
+   "lon": 289.5,
+   "instrument": "tmc",
+   "matcher": "xfeat",
+   "status": "failed",
+   "baked_at": "2026-09-02T22:27:48+00:00"
+  },
+  {
+   "slug": "rayed-crater-5n",
+   "label": "Rayed crater 5.2\u00b0N",
+   "lat": 5.17879877,
+   "lon": 288.954173,
+   "instrument": "tmc",
+   "matcher": "xfeat",
+   "status": "done",
+   "baked_at": "2026-09-02T22:28:21+00:00"
+  },
+  {
+   "slug": "known-failure-3n",
+   "label": "Known failure 3.6\u00b0N",
+   "lat": 3.613415864967716,
+   "lon": 289.12239203822105,
+   "instrument": "tmc",
+   "matcher": "xfeat",
+   "status": "failed",
+   "baked_at": "2026-09-02T22:29:02+00:00"
+  }
+ ]
+}

@@ -7,9 +7,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400;62..125,600;62..125,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/tokens.css?v=3" />
-  <link rel="stylesheet" href="/static/css/console.css?v=3" />
-  <link rel="stylesheet" href="/static/css/panels.css?v=4" />
+  <link rel="stylesheet" href="/static/css/tokens.css?v=5" />
+  <link rel="stylesheet" href="/static/css/console.css?v=5" />
+  <link rel="stylesheet" href="/static/css/panels.css?v=5" />
 </head>
 <body>
   <canvas id="sky" aria-hidden="true"></canvas>
@@ -82,6 +82,34 @@
             </div>
             <button type="submit" class="run" id="run-btn">Run registration</button>
           </div>
+
+          <div class="deploy-note" id="deploy-note" hidden></div>
+
+          <details class="account" id="account" hidden>
+            <summary>Use my own ISSDC account &mdash; run any coordinate live</summary>
+            <p class="account-lede">
+              Chandrayaan-2 data comes from ISRO&rsquo;s ISSDC archive, which requires an
+              account. Enter yours to fetch any coordinate live. It is used for this
+              request only &mdash; never stored, never logged, and never written to the
+              saved run.
+            </p>
+            <div class="account-grid">
+              <div class="field">
+                <label for="issdc-user">ISSDC username</label>
+                <input type="text" id="issdc-user" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="issdc-pass">ISSDC password</label>
+                <input type="password" id="issdc-pass" autocomplete="off" />
+              </div>
+            </div>
+            <p class="account-warn" id="account-warn" hidden></p>
+            <p class="account-lede">
+              No account? <a href="https://pradan.issdc.gov.in/" target="_blank"
+              rel="noopener">Register at ISSDC PRADAN</a>. Without one you can still run
+              the preset coordinates above.
+            </p>
+          </details>
         </form>
       </section>
 
@@ -197,6 +225,6 @@
     </p>
   </footer>
 
-  <script type="module" src="/static/js/main.js?v=4"></script>
+  <script type="module" src="/static/js/main.js?v=5"></script>
 </body>
 </html>
