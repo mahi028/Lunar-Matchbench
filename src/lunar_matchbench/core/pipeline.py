@@ -292,6 +292,12 @@ def run_pipeline(
         "lroc_gsd_m": lroc_gsd,
         "scale_factor_used": round(scale, 3),
         "lroc_start_time": best["start_time"],
+        "footprint": {
+            **overlap_report(_ch2_bbox(lat, lon), _lroc_bbox(best)),
+            "target": {"lat": lat, "lon": lon},
+            "ch2_half_deg": CH2_PATCH_HALF_DEG,
+            "lroc_filename": best["filename"],
+        },
         "lroc_total_candidates": len(candidates),
         "lroc_candidates_tried": len(skipped) + 1,
         "ch2_patch_sha256": hashlib.sha256(ch2_patch.tobytes()).hexdigest()[:16] + "...",
@@ -610,6 +616,22 @@ def _wrap(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width=width) or [""]
 
 
+# Rough extent of a CH2 patch on the ground: ~0.085 deg, about 5 km at the
+# equator. Shared by the rendered map and the footprint payload the console
+# draws from, so the picture and the numbers cannot disagree.
+CH2_PATCH_HALF_DEG = 0.085
+
+
+def _ch2_bbox(lat: float, lon: float) -> BBox:
+    return BBox(lat - CH2_PATCH_HALF_DEG, lat + CH2_PATCH_HALF_DEG,
+                lon - CH2_PATCH_HALF_DEG, lon + CH2_PATCH_HALF_DEG)
+
+
+def _lroc_bbox(candidate: dict) -> BBox:
+    return BBox(candidate["lat_min"], candidate["lat_max"],
+                candidate["lon_min"], candidate["lon_max"])
+
+
 def _make_overlap_map(
     ch2_match: dict, lroc_candidate: dict,
     lat: float, lon: float, label: str,
@@ -619,13 +641,8 @@ def _make_overlap_map(
     OVERLAP_DIR.mkdir(parents=True, exist_ok=True)
     out = OVERLAP_DIR / f"overlap_{label}.png"
 
-    # Use small estimate for the CH2 patch bbox (~0.085° ≈ 5 km at equator)
-    HALF = 0.085
-    ch2_box  = BBox(lat - HALF, lat + HALF, lon - HALF, lon + HALF)
-    lroc_box = BBox(
-        lroc_candidate["lat_min"], lroc_candidate["lat_max"],
-        lroc_candidate["lon_min"], lroc_candidate["lon_max"],
-    )
+    ch2_box  = _ch2_bbox(lat, lon)
+    lroc_box = _lroc_bbox(lroc_candidate)
     report = overlap_report(ch2_box, lroc_box)
     inter  = ch2_box.intersect(lroc_box)
 
@@ -643,7 +660,7 @@ def _make_overlap_map(
     _rect(lroc_box, LROC_ACCENT, LROC_ACCENT, 0.12,
           f"LROC NAC  {lroc_candidate['filename']}")
     _rect(ch2_box, CH2_ACCENT, CH2_ACCENT, 0.30,
-          f"CH2 Patch (±{HALF:.3f}°)")
+          f"CH2 Patch (±{CH2_PATCH_HALF_DEG:.3f}°)")
     if inter:
         _rect(inter, GOOD_COLOR, GOOD_COLOR, 0.45,
               f"Overlap  {report['overlap_area_km2']} km² ({report['ch2_overlap_pct']}%)")

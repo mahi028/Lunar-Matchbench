@@ -16242,6 +16242,49 @@
     "lines_searched": 32142,
     "strip_fraction_searched": 0.615,
     "whole_strip_searched": false
+   },
+   "footprint": {
+    "has_overlap": true,
+    "ch2_bbox": {
+     "lat": [
+      3.528415864967716,
+      3.698415864967716
+     ],
+     "lon": [
+      289.03739203822107,
+      289.20739203822103
+     ]
+    },
+    "lroc_bbox": {
+     "lat": [
+      3.03,
+      3.96
+     ],
+     "lon": [
+      289.08,
+      289.3
+     ]
+    },
+    "intersection_bbox": {
+     "lat": [
+      3.528415864967716,
+      3.698415864967716
+     ],
+     "lon": [
+      289.08,
+      289.20739203822103
+     ]
+    },
+    "overlap_area_km2": 19.87,
+    "ch2_patch_area_km2": 26.52,
+    "ch2_overlap_pct": 74.9,
+    "iou": 0.1022,
+    "target": {
+     "lat": 3.613415864967716,
+     "lon": 289.12239203822105
+    },
+    "ch2_half_deg": 0.085,
+    "lroc_filename": "M1456669083RC.IMG"
    }
   }
  },

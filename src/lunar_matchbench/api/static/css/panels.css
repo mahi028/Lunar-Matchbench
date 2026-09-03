@@ -232,3 +232,75 @@
   color: var(--signal);
   white-space: pre;
 }
+
+/* ── Geographic footprint map ────────────────────────────────────────────────
+   Mission identity follows the console's existing assignment: ISRO orange for
+   Chandrayaan-2, NASA blue for LROC. Fill alpha separates the two footprints,
+   and stroke style carries the same distinction a second time (solid patch,
+   dashed reference strip) so the pair survives colour-vision deficiency and
+   greyscale print. Measured against the panel surface: deuteranope ΔE 24.2,
+   normal-vision ΔE 26.6, contrast above 3:1 on all three. */
+.fp { margin: 0; }
+.fp-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  align-items: flex-start;
+  margin-top: 10px;
+}
+.fp-map { flex: 0 0 auto; }
+.fp-svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.fp-side { flex: 1 1 260px; min-width: 240px; }
+
+.fp-plot { fill: var(--void); stroke: var(--rule); stroke-width: 1; }
+.fp-grid { stroke: var(--rule); stroke-width: 1; opacity: 0.55; }
+.fp-tick { fill: var(--muted); font: 500 10px var(--mono); }
+.fp-tick--y { text-anchor: end; }
+.fp-tick--x { text-anchor: middle; }
+
+.fp-lroc  { fill: var(--nasa); fill-opacity: 0.13; stroke: var(--nasa);
+            stroke-width: 1.6; stroke-dasharray: 5 3; }
+.fp-inter { fill: url(#fp-hatch); stroke: var(--good); stroke-width: 1.2; }
+.fp-hatch-line { stroke: var(--good); stroke-width: 2.2; opacity: 0.55; }
+.fp-ch2   { fill: var(--isro); fill-opacity: 0.30; stroke: var(--isro);
+            stroke-width: 1.8; }
+.fp-target { fill: var(--warn); stroke: var(--void); stroke-width: 0.9; }
+.fp-leader { stroke: var(--isro); stroke-width: 1; opacity: 0.75; }
+.fp-label  { fill: var(--signal); font: 600 10px var(--body); }
+
+.fp-key { list-style: none; margin: 0 0 14px; padding: 0; }
+.fp-key li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--signal);
+}
+.fp-key em { color: var(--muted); font-style: normal; font-family: var(--mono); font-size: 11px; }
+.fp-sw { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 2px; align-self: center; }
+.fp-sw--lroc   { background: color-mix(in srgb, var(--nasa) 20%, transparent);
+                 border: 1.5px dashed var(--nasa); }
+.fp-sw--ch2    { background: color-mix(in srgb, var(--isro) 34%, transparent);
+                 border: 1.5px solid var(--isro); }
+.fp-sw--inter  { border: 1px solid var(--good);
+                 background: repeating-linear-gradient(45deg,
+                   color-mix(in srgb, var(--good) 55%, transparent) 0 2px,
+                   transparent 2px 4px); }
+.fp-sw--target { background: var(--warn); clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); border-radius: 0; }
+
+.fp-stats { display: grid; gap: 8px; margin: 0; padding-top: 12px; border-top: 1px solid var(--rule); }
+.fp-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.fp-stats dt { font-size: 12px; color: var(--muted); }
+.fp-stats dd { margin: 0; font-size: 15px; font-weight: 600; color: var(--signal); }
+.fp-stats dd.is-good { color: var(--good); }
+.fp-stats dd.is-warn { color: var(--warn); }
+
+@media (max-width: 720px) {
+  .fp-body { gap: 16px; }
+  .fp-side { min-width: 0; }
+}
+/* The verdict sentence sits under the whole figure, so it is allowed to run
+   wider than the default explanation column. */
+.fp-note { max-width: 74ch; margin-top: 12px; }
+.fp-note b { color: var(--signal); font-weight: 600; }

@@ -1,3 +1,5 @@
+import { renderFootprint } from "./footprint.js";
+
 // Acquisition context: the facts about the two images that explain the result.
 //
 // Cross-mission registration is hard for reasons that live in the metadata --
@@ -93,9 +95,17 @@ export function renderContext(container, result) {
       ${rows.join("")}
     </div>`;
 
-  if (result.overlap_map_url) {
-    container.insertAdjacentHTML("beforeend", `
-      <figure class="chart ctx-map">
+  // Drawn from the run's own footprint numbers when it has them. The rendered
+  // PNG is the fallback for runs baked before those numbers were recorded: it
+  // carries the same geometry, just in the poster's print palette.
+  const host = document.createElement("div");
+  host.className = "chart ctx-map";
+  container.appendChild(host);
+
+  const drawn = renderFootprint(host, (result.provenance || {}).footprint);
+  if (!drawn && result.overlap_map_url) {
+    host.innerHTML = `
+      <figure>
         <figcaption class="eyebrow">Geographic footprint overlap</figcaption>
         <img src="${result.overlap_map_url}" alt="Map of the Chandrayaan-2 patch against the LROC image footprint" />
         <p class="chart-explain">
@@ -103,6 +113,8 @@ export function renderContext(container, result) {
           lunar surface. The two have to overlap on the ground before any pixel
           comparison is meaningful.
         </p>
-      </figure>`);
+      </figure>`;
+  } else if (!drawn) {
+    host.remove();
   }
 }
