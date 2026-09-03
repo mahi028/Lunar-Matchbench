@@ -1,4 +1,15 @@
-﻿# Lunar-MatchBench 🌕
+---
+title: Lunar-MatchBench
+emoji: 🌕
+colorFrom: gray
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: Cross-mission lunar image registration, Chandrayaan-2 to LROC NAC
+---
+
+# Lunar-MatchBench 🌕
 
 > **SIH 2026 Space Technology | ISRO Problem ID: SIH26166**  
 > Cross-Mission Lunar Optical Image Registration & Benchmark Engine  

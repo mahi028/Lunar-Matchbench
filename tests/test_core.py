@@ -377,3 +377,28 @@ def test_registration_rejects_an_image_matched_against_itself():
     # A true self-match is essentially exact: near-zero error, near-total inliers.
     assert same["reprojection_rmse_px"] < 0.05, same["reprojection_rmse_px"]
     assert same["inlier_ratio_pct"] > 95, same["inlier_ratio_pct"]
+
+
+def test_project_root_is_overridable(tmp_path, monkeypatch):
+    """Installed in a container, walking up from __file__ lands in site-packages.
+
+    Without an override the demo bundle, job records and cache would all resolve
+    inside the Python installation instead of the deployment's own directory.
+    """
+    import importlib
+
+    monkeypatch.setenv("LMB_PROJECT_ROOT", str(tmp_path))
+    import lunar_matchbench.config as config
+    reloaded = importlib.reload(config)
+    try:
+        assert reloaded.PROJECT_ROOT == tmp_path
+        assert reloaded.DATA_ROOT == tmp_path / "data_store"
+        assert reloaded.OUTPUT_ROOT == tmp_path / "outputs"
+
+        monkeypatch.setenv("LMB_OUTPUT_ROOT", str(tmp_path / "elsewhere"))
+        again = importlib.reload(config)
+        assert again.OUTPUT_ROOT == tmp_path / "elsewhere"
+    finally:
+        monkeypatch.delenv("LMB_PROJECT_ROOT", raising=False)
+        monkeypatch.delenv("LMB_OUTPUT_ROOT", raising=False)
+        importlib.reload(config)

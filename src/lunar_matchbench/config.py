@@ -6,9 +6,15 @@ from pathlib import Path
 import os
 
 # ── Project roots ─────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_ROOT    = PROJECT_ROOT / "data_store"            # downloaded science data
-OUTPUT_ROOT  = PROJECT_ROOT / "outputs"               # registration results
+# Walking up from this file lands on the repository root when running from a
+# source checkout -- but on `site-packages` once the package is pip-installed,
+# which is what happens inside the container. Everything writable, and the demo
+# bundle, would then resolve inside the Python installation. LMB_PROJECT_ROOT is
+# how a deployment says where its data actually lives; the Dockerfile sets it.
+_SOURCE_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(os.environ.get("LMB_PROJECT_ROOT") or _SOURCE_ROOT)
+DATA_ROOT    = Path(os.environ.get("LMB_DATA_ROOT") or PROJECT_ROOT / "data_store")
+OUTPUT_ROOT  = Path(os.environ.get("LMB_OUTPUT_ROOT") or PROJECT_ROOT / "outputs")
 STATIC_ROOT  = Path(__file__).parent / "api" / "static"
 
 # Sub-folders inside data_store/
