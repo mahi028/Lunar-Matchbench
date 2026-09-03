@@ -6,24 +6,21 @@ from pathlib import Path
 import os
 
 # ── Project roots ─────────────────────────────────────────────────────────────
-# PROJECT_ROOT must NOT be derived from this file's own location (the old
-# `parent.parent.parent`) -- that only resolves correctly when running from
-# the source tree (uv run / editable install). Once the package is installed
-# normally (as the Dockerfile's `pip install .` does), config.py lives under
-# .../site-packages/lunar_matchbench/, and that computation silently pointed
-# at somewhere inside the Python installation itself (e.g.
-# /usr/local/lib/python3.14) instead of the app's working directory -- every
-# downloaded file was written there instead of any deployment's actual (and
-# possibly volume-mounted) data directory, and the next lookup never found
-# it there either, forcing a re-download on every request.
-#
-# Default to the current working directory: the project root for `uv run` /
-# pytest (both invoked from there), and /app inside the Docker image per its
-# WORKDIR. LUNAR_MATCHBENCH_DATA_ROOT overrides this for deployments that
-# need data on a specific (e.g. separately mounted) path.
-PROJECT_ROOT = Path(os.environ.get("LUNAR_MATCHBENCH_DATA_ROOT", Path.cwd()))
-DATA_ROOT    = PROJECT_ROOT / "data_store"            # downloaded science data
-OUTPUT_ROOT  = PROJECT_ROOT / "outputs"               # registration results
+# Walking up from this file lands on the repository root when running from a
+# source checkout -- but on `site-packages` once the package is pip-installed,
+# which is what happens inside the container. Everything writable, and the demo
+# bundle, would then resolve inside the Python installation, so the root has to
+# be stated by the deployment rather than inferred. The Dockerfile sets
+# LMB_PROJECT_ROOT; LUNAR_MATCHBENCH_DATA_ROOT is accepted as an alias so the
+# Railway deployment configured against that name keeps working.
+_SOURCE_ROOT = Path(__file__).resolve().parent.parent.parent
+PROJECT_ROOT = Path(
+    os.environ.get("LMB_PROJECT_ROOT")
+    or os.environ.get("LUNAR_MATCHBENCH_DATA_ROOT")
+    or _SOURCE_ROOT
+)
+DATA_ROOT    = Path(os.environ.get("LMB_DATA_ROOT") or PROJECT_ROOT / "data_store")
+OUTPUT_ROOT  = Path(os.environ.get("LMB_OUTPUT_ROOT") or PROJECT_ROOT / "outputs")
 STATIC_ROOT  = Path(__file__).parent / "api" / "static"
 
 # Sub-folders inside data_store/
@@ -47,9 +44,13 @@ POSTER_DIR   = OUTPUT_ROOT / "posters"
 OVERLAP_DIR  = OUTPUT_ROOT / "overlap"
 JOB_DIR      = OUTPUT_ROOT / "jobs"
 
+# HTTP byte-range cache. Keyed by (url, offset, length), so a re-run of the
+# same coordinate serves from disk instead of re-fetching.
+CACHE_DIR    = DATA_ROOT / "cache"
+
 def ensure_dirs() -> None:
     """Create all required directories if absent."""
-    for d in [CH2_DATA_DIR, LROC_DATA_DIR, POSTER_DIR, OVERLAP_DIR, JOB_DIR]:
+    for d in [CH2_DATA_DIR, LROC_DATA_DIR, POSTER_DIR, OVERLAP_DIR, JOB_DIR, CACHE_DIR]:
         d.mkdir(parents=True, exist_ok=True)
 
 # ── Instrument constants ──────────────────────────────────────────────────────
@@ -96,3 +97,28 @@ LROC_SCAN_RANGE = 10000         # ± lines around geometry estimate
 # ── HTTP download ─────────────────────────────────────────────────────────────
 DOWNLOAD_CHUNK  = 4 * 1024 * 1024   # 4 MB
 HTTP_TIMEOUT    = 60                 # seconds
+
+# ── Range streaming ──────────────────────────────────────────────────────────
+# Measured against pds.lroc.im-ldi.com on 2026-09-02: the host honours single
+# byte-ranges (206, accurate Content-Range) but silently IGNORES comma-separated
+# multi-ranges -- a 3 KB multi-range request came back 200 with all 529 MB.
+# Never batch ranges; issue one contiguous interval per request.
+RANGE_CHUNK_MAX     = 64 * 1024 * 1024   # refuse absurd single reads
+# Archive hosts drop long-lived connections; a run should survive one blip.
+RANGE_MAX_RETRIES   = 3                  # attempts per ranged read
+RANGE_RETRY_WAIT    = 1.5                # seconds, multiplied by attempt
+LROC_SEARCH_MARGIN  = 0.5                # extra window height, as a fraction of raw_win
+MAX_LROC_WINDOWS    = 3                  # hard cap on windows fetched per product
+# Each LROC window costs buffer_lines * samples * 2 bytes -- 77 MB at TMC scale,
+# so three windows across three candidates can reach ~1.1 GB, which defeats the
+# point of streaming. This is an absolute ceiling on network bytes for one
+# registration: reaching it fails the run with a clear reason rather than
+# quietly transferring a gigabyte.
+RUN_BYTE_BUDGET     = 700 * 1024 * 1024
+# Probing an in-memory buffer costs a SIFT pass, not a read, so the search is
+# denser than the old per-read LROC_SCAN_STEP allowed. The step is derived from
+# the buffer span so a small window still gets probed properly.
+LROC_PROBE_COUNT    = 12                 # coarse probes across a loaded window
+LROC_PROBE_STEP_MIN = 200                # lines; floor on the coarse step
+LROC_FINE_STEP_MIN  = 100                # lines; floor on the refinement step
+INFLATE_BUDGET      = 600 * 1024 * 1024  # max compressed bytes to stream-inflate

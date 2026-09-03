@@ -25,24 +25,26 @@ from lunar_matchbench.config import (
     ODE_BASE_URL, ODE_IHID, ODE_IID, ODE_PT, ODE_BBOX_DEG,
     DOWNLOAD_CHUNK, HTTP_TIMEOUT, INSTRUMENT_META,
     LROC_SCAN_STEP, LROC_SCAN_RANGE, PATCH_SIZE,
+    MAX_LROC_WINDOWS, LROC_SEARCH_MARGIN,
+    LROC_PROBE_COUNT, LROC_PROBE_STEP_MIN, LROC_FINE_STEP_MIN,
 )
 from lunar_matchbench.utils.image import normalise_uint8, resize_to, has_real_content
 from lunar_matchbench.utils.geo import DEG_TO_KM_LAT
+from lunar_matchbench.core.streaming import (
+    LocalLrocReader, LrocStream, _CONTENT_RANGE_RE,
+)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
-    """
-    Download url → dest with resume support. Returns dest path.
+    """Download url -> dest. Returns dest path.
 
-    Downloads to a `.part` sibling and only renames it to `dest` once the
-    transfer completes -- so `dest` existing is proof the download actually
-    finished. Writing straight to `dest` (the old behaviour) meant a process
-    killed mid-download left a truncated file under the *final* filename,
-    which every later call then trusted as a complete, valid cache hit --
-    the truncated bytes only surfaced much later as an obscure reshape
-    crash deep in patch extraction, far from the actual cause.
+    Written to a .part file and renamed only once the transfer completes, so an
+    interrupted download can never leave a truncated file sitting under the real
+    product name where later runs would trust it. A truncated M1359306139LC.IMG
+    left behind by a killed run is exactly what made a documented-working
+    benchmark coordinate start failing.
     """
     if dest.exists() and dest.stat().st_size > 0:
         return dest
@@ -56,8 +58,14 @@ def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
     with requests.get(url, headers=headers, stream=True, timeout=HTTP_TIMEOUT) as r:
         r.raise_for_status()
         total = int(r.headers.get("content-length", 0)) + existing
-        mode = "ab" if existing else "wb"
-        downloaded = existing
+        # Only append when the server confirms it resumed where we asked; a 206
+        # that restarts at zero would otherwise duplicate the prefix.
+        append = False
+        if existing and r.status_code == 206:
+            m = _CONTENT_RANGE_RE.search(r.headers.get("Content-Range", ""))
+            append = bool(m) and int(m.group(1)) == existing
+        mode = "ab" if append else "wb"
+        downloaded = existing if append else 0
         t0 = time.time()
         with open(partial, mode) as f:
             for chunk in r.iter_content(chunk_size=DOWNLOAD_CHUNK):
@@ -73,7 +81,7 @@ def _http_download(url: str, dest: Path, verbose: bool = True) -> Path:
                             print(f"\r  Downloaded {downloaded/1e6:.1f} MB  @ {rate:.1f} MB/s", end="", flush=True)
     if verbose:
         print()
-    partial.rename(dest)
+    partial.replace(dest)
     return dest
 
 
@@ -144,7 +152,23 @@ def find_ch2_geometry_match(lat: float, lon: float, instrument: str) -> dict | N
     # acquisition. Use the real value when available so patch footprint math
     # downstream reflects the product actually being read, not the spec sheet.
     best["gsd_m"] = _read_ch2_pixel_resolution(best["zip_path"]) or meta["gsd_m"]
+    best["product"] = best["zip_path"].name
+    best["start_time"] = _ch2_time_from_name(best["product"])
     return best
+
+
+def _ch2_time_from_name(name: str) -> str:
+    """Pull the acquisition timestamp out of a CH2 product name.
+
+    ISSDC encodes it as ..._20191218T1121183775_..., and it is the other half of
+    the time separation between the two passes -- which is what sets the sun
+    angle difference this whole problem statement is about.
+    """
+    m = re.search(r"_(20\d{2})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})", name or "")
+    if not m:
+        return ""
+    y, mo, dd, hh, mi, ss = m.groups()
+    return f"{y}-{mo}-{dd}T{hh}:{mi}:{ss}"
 
 
 def _read_ch2_pixel_resolution(zip_path: Path) -> float | None:
@@ -158,13 +182,64 @@ def _read_ch2_pixel_resolution(zip_path: Path) -> float | None:
     return float(m.group(1)) if m else None
 
 
+def find_ch2_geometry_match_streamed(zstream, lat: float, lon: float,
+                                     instrument: str) -> dict | None:
+    """Nearest-grid-point search against a remote ZIP's geometry CSV.
+
+    The CSV is ~0.8 MB compressed, so resolving a coordinate to a scan line
+    costs two small ranged reads rather than the whole archive.
+    """
+    meta = INSTRUMENT_META[instrument]
+    csv_names = [n for n in zstream.namelist() if n.endswith(".csv")]
+    if not csv_names:
+        return None
+    text = zstream.member_bytes(csv_names[0]).decode("utf-8", errors="replace")
+
+    best: dict | None = None
+    best_dist = float("inf")
+    # Longitude degrees shrink toward the poles, so weight by cos(lat) or a
+    # 1 deg lon offset scores the same as a 1 deg lat offset (~30 km).
+    lon_weight = np.cos(np.radians(lat))
+    for row in csv.DictReader(io.StringIO(text)):
+        try:
+            rlat = float(row["Latitude"])
+            rlon = float(row["Longitude"])
+            dist = (rlat - lat) ** 2 + ((rlon - lon) * lon_weight) ** 2
+            if dist < best_dist:
+                best_dist = dist
+                best = {
+                    "zstream": zstream,
+                    "lat": rlat, "lon": rlon,
+                    "scan": int(row["Scan"]), "pixel": int(row["Pixel"]),
+                    "dist_deg": dist ** 0.5,
+                }
+        except (ValueError, KeyError):
+            continue
+
+    patch_half_km = PATCH_SIZE * meta["gsd_m"] / 1000 / 2
+    if best is None or best["dist_deg"] > patch_half_km / DEG_TO_KM_LAT:
+        return None
+
+    # Prefer the product's own recorded resolution over the spec constant.
+    best["gsd_m"] = meta["gsd_m"]
+    img_names = [n for n in zstream.namelist() if n.lower().endswith(".img")]
+    best["product"] = img_names[0].rsplit("/", 1)[-1] if img_names else ""
+    best["start_time"] = _ch2_time_from_name(best["product"])
+    xml_names = [n for n in zstream.namelist() if n.lower().endswith(".xml")]
+    if xml_names:
+        xml = zstream.member_bytes(xml_names[0]).decode("utf-8", errors="replace")
+        m = re.search(r"pixel_resolution[^>]*>([\d.]+)<", xml, re.IGNORECASE)
+        if m:
+            best["gsd_m"] = float(m.group(1))
+    return best
+
+
 def extract_ch2_patch(match: dict, instrument: str, size: int = PATCH_SIZE) -> np.ndarray | None:
     """
     Read a `size × size` pixel patch centred on the matched scan/pixel from the
     CH2 binary raster inside the ZIP.
     """
     meta = INSTRUMENT_META[instrument]
-    zp = match["zip_path"]
     scan, pixel = match["scan"], match["pixel"]
     samples = meta["samples_per_line"]
     bps = 2 if meta["dtype"] != "uint8" else 1
@@ -176,6 +251,23 @@ def extract_ch2_patch(match: dict, instrument: str, size: int = PATCH_SIZE) -> n
     # patch instead of the full size x size window centred nearby.
     col_start = max(0, min(pixel - half, samples - size))
 
+    # Remote-zip path: read only the lines needed, inflating from the member
+    # start and stopping there, rather than transferring the whole archive.
+    zstream = match.get("zstream")
+    if zstream is not None:
+        img_names = [n for n in zstream.namelist()
+                     if n.lower().endswith(".img") and "browse" not in n.lower()]
+        if not img_names:
+            return None
+        total_lines = zstream.member_info(img_names[0])["file_size"] // (samples * bps)
+        line_start = max(0, min(scan - half, max(0, total_lines - size)))
+        arr = zstream.img_lines(img_names[0], samples, dtype, line_start, size)
+        crop = arr[:size, col_start:col_start + size]
+        if crop.shape[0] < size // 4 or crop.shape[1] < size // 4:
+            return None
+        return normalise_uint8(crop)
+
+    zp = match["zip_path"]
     with zipfile.ZipFile(zp) as zf:
         img_names = [n for n in zf.namelist()
                      if n.lower().endswith(".img") and "browse" not in n.lower()]
@@ -263,7 +355,44 @@ def discover_lroc_products(lat: float, lon: float,
         })
 
     candidates.sort(key=lambda x: (not x["is_inside"], x["centre_dist"]))
-    return candidates
+    # Spread the attempt budget across different spacecraft passes rather than
+    # spending it on both halves of one stereo pair.
+    return interleave_by_acquisition(candidates)
+
+
+def _acquisition_key(candidate: dict) -> str:
+    """Identify the spacecraft pass a candidate came from.
+
+    LROC NAC ships as a left/right pair from one pass -- nac.m1359306139lc and
+    nac.m1359306139rc are the same moment, same sun angle, same shadows -- so
+    they count as one acquisition for diversity purposes.
+    """
+    pds_id = (candidate.get("pds_id") or "").strip().lower()
+    if pds_id:
+        return re.sub(r"[lr]c$", "", pds_id)
+    return (candidate.get("start_time") or candidate.get("filename") or "?")
+
+
+def interleave_by_acquisition(ranked: list[dict]) -> list[dict]:
+    """Reorder so consecutive candidates come from different acquisitions.
+
+    Ranking purely by footprint puts the two halves of one stereo pair at the
+    top, so all three attempts get the same illumination and a coordinate that
+    fails under that sun angle never gets a second chance. Rank order is kept
+    inside each acquisition; only the interleaving across them is new.
+    """
+    groups: dict[str, list[dict]] = {}
+    for cand in ranked:
+        groups.setdefault(_acquisition_key(cand), []).append(cand)
+
+    out: list[dict] = []
+    queues = list(groups.values())
+    while queues:
+        for q in list(queues):
+            out.append(q.pop(0))
+            if not q:
+                queues.remove(q)
+    return out
 
 
 def download_lroc(candidate: dict, verbose: bool = True) -> Path:
@@ -283,27 +412,35 @@ def download_lroc(candidate: dict, verbose: bool = True) -> Path:
     return _http_download(candidate["url"], dest, verbose=verbose)
 
 
-def _parse_pds3_header(path: Path) -> dict:
-    """Extract key PDS3 label fields from an attached binary label."""
-    with open(path, "rb") as f:
-        raw = f.read(65536)
-    hdr = raw.decode("latin-1", errors="replace")
-    def _get(key: str, default=None):
-        m = re.search(rf"{key}\s*=\s*\"?([^\r\n\"]+)\"?", hdr)
-        return m.group(1).strip() if m else default
-    return {
-        "total_lines":    int(_get("LINES", 48128)),
-        "total_samples":  int(_get("LINE_SAMPLES", 5064)),
-        "label_records":  int(_get("LABEL_RECORDS", 2)),
-        "record_bytes":   int(_get("RECORD_BYTES", 5064 * 2)),
-        "product_id":     _get("PRODUCT_ID", ""),
-        "start_time":     _get("START_TIME", ""),
-        "dataset_id":     _get("DATA_SET_ID", ""),
-    }
+def open_lroc_reader(candidate: dict, prefer_stream: bool = True, budget=None):
+    """Return a line-window reader for an LROC product.
+
+    A cached local copy always wins -- it is faster and costs no bandwidth.
+    Otherwise the product is read over HTTP byte ranges rather than downloaded,
+    which for a TMC-scale window is ~39 MB instead of ~529 MB.
+    """
+    fname = candidate["filename"]
+    for d in LROC_SEARCH_DIRS:
+        local = d / fname
+        if not (local.exists() and local.stat().st_size > 0):
+            continue
+        reader = LocalLrocReader(local)
+        # "Non-empty" is not "complete". An interrupted download leaves a
+        # truncated .IMG under the real filename, and reads past its end come
+        # back as zero lines -- indistinguishable from empty imagery unless the
+        # size is checked against what the label itself declares.
+        if reader.is_complete:
+            return reader
+        print(f"  Ignoring truncated local product {local.name} "
+              f"({local.stat().st_size / 1e6:.1f} MB of "
+              f"{reader.expected_bytes / 1e6:.1f} MB); streaming instead.")
+    if not prefer_stream:
+        return LocalLrocReader(download_lroc(candidate, verbose=False))
+    return LrocStream.open(candidate["url"], budget=budget)
 
 
 def extract_lroc_patch(
-    img_path: Path,
+    reader,
     candidate: dict,
     lat: float,
     lon: float,
@@ -312,154 +449,164 @@ def extract_lroc_patch(
     size: int = PATCH_SIZE,
 ) -> tuple[np.ndarray | None, dict]:
     """
-    Extract a scale-matched patch from the LROC NAC strip.
+    Extract a scale-matched patch from an LROC NAC strip.
 
-    Strategy:
-    1. Estimate center scan line from pushbroom geometry.
-    2. If `ref_patch` is provided, run a fast SIFT-based coarse-to-fine scan
-       (±LROC_SCAN_RANGE lines in LROC_SCAN_STEP increments) to lock onto
-       the scan line with peak visual correlation with the CH2 source patch.
-    3. Extract raw_window = size * scale_factor lines, downsample to (size, size).
+    Strategy (geometry-first):
+      1. Estimate the centre scan line from the product's own footprint.
+      2. Fetch ONE oversized window around that estimate -- a single read.
+      3. Run the coarse-to-fine descriptor search entirely INSIDE that buffer.
+         Probing in memory is what makes this affordable over HTTP: the old
+         approach re-read the source for every probe, which is free on a local
+         file and ruinous across ~30 network fetches.
+      4. Only if no confident peak turns up, slide to an adjacent window --
+         capped at MAX_LROC_WINDOWS so a hopeless coordinate cannot run away.
 
-    Returns (patch_or_None, localization_info). localization_info always
-    has 'best_n' (peak coarse-scan good-match count) and 'confident'
-    (whether that peak cleared MIN_CONFIDENT_MATCHES) -- a False here means
-    the patch was extracted at the raw geometry estimate, not a verified
-    visual correlation, so a downstream match failure can't be told apart
-    from "genuinely hard" without checking this.
+    Returns (patch_or_None, localization_info). `confident` False means the
+    patch came from the raw geometry estimate rather than a verified visual
+    correlation, so a downstream match failure cannot be read as "genuinely
+    hard" without checking this first.
     """
     import cv2
-    hdr = _parse_pds3_header(img_path)
-    total_lines   = hdr["total_lines"]
-    total_samples = hdr["total_samples"]
-    data_offset   = hdr["label_records"] * hdr["record_bytes"]
-    raw_win       = min(int(round(size * scale_factor)), total_lines)
-    # Crop the cross-track (sample) axis to the same physical footprint as the
-    # along-track (line) axis. Without this, the full LROC line width (e.g.
-    # ~5064 samples, ~2.5 km) gets squashed into `size` regardless of
-    # scale_factor, which is a mild aspect distortion for TMC-2 (scale_factor
-    # 6 means the window already wants close to the full width) but severely
-    # anisotropic for OHRC (scale_factor 1 wants a ~1024-sample-wide window,
-    # ~5x narrower than the full strip) — the squashed image ends up at a
-    # completely different effective GSD per axis, which breaks feature
-    # matching against the square, single-scale CH2 patch.
-    raw_win_samples = min(int(round(size * scale_factor)), total_samples)
 
-    # ── Geometry estimate ──────────────────────────────────────────────────────
+    total_lines = reader.total_lines
+    total_samples = reader.total_samples
+    raw_win = min(int(round(size * scale_factor)), total_lines)
+    raw_win_samples = min(int(round(size * scale_factor)), total_samples)
+    margin = int(raw_win * LROC_SEARCH_MARGIN)
+    buffer_lines = min(raw_win + 2 * margin, total_lines)
+
+    # -- Geometry estimate ----------------------------------------------------
     lat_min, lat_max = candidate["lat_min"], candidate["lat_max"]
     lat_frac = (lat_max - lat) / (lat_max - lat_min + 1e-9)
     approx_center = int(np.clip(lat_frac * total_lines,
-                                raw_win // 2, total_lines - raw_win // 2))
+                                raw_win // 2,
+                                max(raw_win // 2, total_lines - raw_win // 2)))
 
-    def _read_window(center: int) -> np.ndarray | None:
-        ls = max(0, center - raw_win // 2)
-        nl = min(raw_win, total_lines - ls)
-        skip = data_offset + ls * total_samples * 2
-        nbytes = nl * total_samples * 2
-        with open(img_path, "rb") as f:
-            f.seek(skip)
-            raw = f.read(nbytes)
-        if len(raw) < nbytes:
-            # The file on disk is shorter than its own PDS3 header's LINES
-            # field promises (a truncated/corrupted download, most likely --
-            # see _http_download's .part-then-rename fix). Treat this window
-            # as unavailable rather than letting reshape() raise and crash
-            # the whole job; the caller already skips a None window / falls
-            # through to the next candidate product.
+    def _crop(arr: np.ndarray) -> np.ndarray | None:
+        """Centre-crop the sample axis, then validate and normalise."""
+        if arr.shape[0] < raw_win // 2:
             return None
-        arr = np.frombuffer(raw, dtype="<i2").reshape(nl, total_samples).astype(np.float32)
         if raw_win_samples < total_samples:
             cs = (total_samples - raw_win_samples) // 2
             arr = arr[:, cs:cs + raw_win_samples]
-        arr[arr < -32752] = np.nan
         valid = arr[~np.isnan(arr)]
         if len(valid) < 500:
             return None
-        # Some CDR products (e.g. calibration/dark frames mis-tagged with a
-        # lunar-surface footprint) are just sensor noise around a near-zero
-        # baseline. normalise_uint8's percentile stretch would blow that up
-        # to look like a fully-textured image, so filter it out here first.
+        # A percentile stretch would happily turn a dark calibration frame into
+        # something that looks fully textured, so screen the raw values for real
+        # spatial structure before normalising.
         if not has_real_content(arr):
             return None
         return normalise_uint8(arr)
 
-    # ── Coarse-to-fine descriptor scan ────────────────────────────────────────
+    MIN_CONFIDENT_MATCHES = 100
     best_center = approx_center
     best_n = 0
-    # A genuine correlation peak (verified against a known-good match) scores
-    # in the hundreds (220-281 good matches); repetitive lunar crater texture
-    # produces spurious "peaks" of ~20-60 good matches essentially anywhere
-    # in the strip. Below this floor, a coarse-scan "winner" is noise, not a
-    # real match -- trusting it anyway is what let a spurious peak 18,000
-    # lines away from the true location win over the (correctly-located but
-    # weakly-scored) true region. Below the floor, keep the geometry estimate
-    # instead of overriding it with noise.
-    MIN_CONFIDENT_MATCHES = 100
+    windows_fetched = 0
+    covered_lo: int | None = None
+    covered_hi: int | None = None
+    chosen: np.ndarray | None = None
+
+    sift = bf = kp_ref = des_ref = None
     if ref_patch is not None:
         sift = cv2.SIFT_create(nfeatures=1500)
         kp_ref, des_ref = sift.detectAndCompute(ref_patch, None)
-        if des_ref is not None and len(kp_ref) > 10:
+        if des_ref is None or len(kp_ref) <= 10:
+            sift = None
+        else:
             bf = cv2.BFMatcher(cv2.NORM_L2)
 
-            # Pass 1: search near the geometry estimate first (most likely to
-            # be correct); only look further afield if nothing confident
-            # turns up nearby.
-            min_c = raw_win // 2
-            max_c = total_lines - raw_win // 2
-            near_centers = list(range(max(min_c, approx_center - 12500),
-                                       min(max_c, approx_center + 12500), LROC_SCAN_STEP))
-            far_centers = [c for c in range(min_c, max_c, LROC_SCAN_STEP) if c not in near_centers]
+    def _score(thumb_src: np.ndarray) -> int:
+        thumb = resize_to(thumb_src, size)
+        kp_l, des_l = sift.detectAndCompute(thumb, None)
+        if des_l is None or len(kp_l) <= 10:
+            return 0
+        knn = bf.knnMatch(des_ref, des_l, k=2)
+        return len([m for m, n in knn if m.distance < 0.78 * n.distance])
 
-            def _scan(centers):
-                nonlocal best_n, best_center
-                for cand_center in centers:
-                    thumb_raw = _read_window(cand_center)
-                    if thumb_raw is None:
-                        continue
-                    thumb = resize_to(thumb_raw, size)
-                    kp_l, des_l = sift.detectAndCompute(thumb, None)
-                    if des_l is not None and len(kp_l) > 10:
-                        knn = bf.knnMatch(des_ref, des_l, k=2)
-                        good = [m for m, n in knn if len((m, n)) == 2 and m.distance < 0.78 * n.distance]
-                        if len(good) > best_n:
-                            best_n = len(good)
-                            best_center = cand_center
+    # Windows are tried outward from the geometry estimate.
+    offsets = [0]
+    for k in range(1, MAX_LROC_WINDOWS):
+        offsets.append(buffer_lines * (k if k % 2 else -k))
 
-            _scan(near_centers)
-            if best_n < MIN_CONFIDENT_MATCHES:
-                _scan(far_centers)
-            if best_n < MIN_CONFIDENT_MATCHES:
-                # Nothing confident anywhere in the strip -- trust the
-                # geometry estimate rather than a noise-level "winner".
-                best_center, best_n = approx_center, 0
+    for off in offsets[:MAX_LROC_WINDOWS]:
+        buf_start = int(np.clip(approx_center + off - buffer_lines // 2,
+                                0, max(0, total_lines - buffer_lines)))
+        buf = reader.read_lines(buf_start, buffer_lines)
+        windows_fetched += 1
+        if buf.shape[0] < raw_win // 2:
+            continue
+        covered_lo = buf_start if covered_lo is None else min(covered_lo, buf_start)
+        covered_hi = (buf_start + buf.shape[0] if covered_hi is None
+                      else max(covered_hi, buf_start + buf.shape[0]))
 
-            # Pass 2: Fine refinement (step = 500 lines) around coarse peak,
-            # only meaningful once a confident coarse peak was actually found.
-            if best_n >= MIN_CONFIDENT_MATCHES:
-                fine_lo = max(min_c, best_center - 2500)
-                fine_hi = min(max_c, best_center + 2500)
-                for fine_center in range(fine_lo, fine_hi, 500):
-                    thumb_raw = _read_window(fine_center)
-                    if thumb_raw is None:
-                        continue
-                    thumb = resize_to(thumb_raw, size)
-                    kp_l, des_l = sift.detectAndCompute(thumb, None)
-                    if des_l is not None and len(kp_l) > 10:
-                        knn = bf.knnMatch(des_ref, des_l, k=2)
-                        good = [m for m, n in knn if len((m, n)) == 2 and m.distance < 0.78 * n.distance]
-                        if len(good) > best_n:
-                            best_n = len(good)
-                            best_center = fine_center
+        if sift is None:
+            chosen = _crop(buf[:raw_win])
+            best_center = buf_start + raw_win // 2
+            break
+
+        # Probe centres inside the already-loaded buffer -- no further reads.
+        # LROC_SCAN_STEP (2500 lines) was sized for the old design where every
+        # probe cost a fresh read of the source. Probing an in-memory buffer
+        # costs only a SIFT pass, so the step is derived from the span instead:
+        # a fixed 2500 would fit just one probe into a small buffer and miss the
+        # match entirely.
+        lo = raw_win // 2
+        hi = max(lo + 1, buf.shape[0] - raw_win // 2)
+        step = max(LROC_PROBE_STEP_MIN, (hi - lo) // LROC_PROBE_COUNT)
+        for local_center in range(lo, hi, step):
+            cand = _crop(buf[local_center - raw_win // 2:local_center + raw_win // 2])
+            if cand is None:
+                continue
+            n_good = _score(cand)
+            if n_good > best_n:
+                best_n, best_center, chosen = n_good, buf_start + local_center, cand
+
+        if best_n >= MIN_CONFIDENT_MATCHES:
+            # Fine pass, still inside this buffer.
+            centre_local = best_center - buf_start
+            fine_step = max(LROC_FINE_STEP_MIN, step // 5)
+            for local_center in range(max(lo, centre_local - step),
+                                      min(hi, centre_local + step), fine_step):
+                cand = _crop(buf[local_center - raw_win // 2:local_center + raw_win // 2])
+                if cand is None:
+                    continue
+                n_good = _score(cand)
+                if n_good > best_n:
+                    best_n, best_center, chosen = n_good, buf_start + local_center, cand
+            break
+
+    confident = best_n >= MIN_CONFIDENT_MATCHES
+    if not confident:
+        # Nothing convincing anywhere we looked. Repetitive crater texture
+        # produces spurious peaks of ~20-60 matches essentially anywhere in a
+        # strip, so trusting a "winner" below the floor is how a patch 18,000
+        # lines from the truth once won. Fall back to the geometry estimate.
+        best_center = approx_center
+        best_n = 0
+        buf_start = int(np.clip(approx_center - raw_win // 2, 0,
+                                max(0, total_lines - raw_win)))
+        chosen = _crop(reader.read_lines(buf_start, raw_win))
+
+    lines_searched = (covered_hi - covered_lo) if covered_lo is not None else 0
+    # Whether an unconfident result is meaningful evidence depends entirely on
+    # how much of the strip was actually examined.
+    whole_strip = total_lines > 0 and lines_searched >= 0.95 * total_lines
 
     localization_info = {
         "best_n": best_n,
         "min_confident_matches": MIN_CONFIDENT_MATCHES,
-        "confident": best_n >= MIN_CONFIDENT_MATCHES,
+        "confident": confident,
         "approx_center_line": approx_center,
         "used_center_line": best_center,
+        "windows_fetched": windows_fetched,
+        "window_lines": buffer_lines,
+        "total_lines": total_lines,
+        "lines_searched": lines_searched,
+        "strip_fraction_searched": (round(lines_searched / total_lines, 3)
+                                    if total_lines else 0.0),
+        "whole_strip_searched": bool(whole_strip),
     }
-
-    raw_img = _read_window(best_center)
-    if raw_img is None:
+    if chosen is None:
         return None, localization_info
-    return resize_to(raw_img, size), localization_info
+    return resize_to(chosen, size), localization_info

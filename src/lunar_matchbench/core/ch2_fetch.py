@@ -23,6 +23,7 @@ from typing import Callable
 import requests
 
 from lunar_matchbench.config import CH2_DATA_DIR
+from lunar_matchbench.core.streaming import _CONTENT_RANGE_RE
 
 WFS_URL = "https://chmapbrowse.issdc.gov.in/server/wfs"
 PRADAN_URL_PREFIX = "https://pradan.issdc.gov.in"
@@ -50,7 +51,27 @@ class Ch2FetchError(RuntimeError):
     """Raised for credential/login/query failures (vs. a plain 'nothing found')."""
 
 
-def _get_credentials() -> tuple[str, str]:
+def _get_credentials(override: tuple[str, str] | None = None) -> tuple[str, str]:
+    """Credentials for an ISSDC session.
+
+    An explicit pair wins, so a visitor can run against their own account
+    without the deployment needing one at all.
+    """
+    if override and override[0] and override[1]:
+        return override[0], override[1]
+
+    # An explicit switch an operator can rely on. load_dotenv() searches upward
+    # from this module's own directory, not the working directory, so a stray
+    # .env anywhere above the package is picked up no matter where the process
+    # runs -- "just do not set the environment variables" is not a guarantee.
+    # This is, and it is what a public deployment should set.
+    if os.environ.get("LMB_DEMO_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise Ch2FetchError(
+            "This deployment is in demo-only mode (LMB_DEMO_ONLY is set), so it "
+            "does not use a server ISSDC account. Supply your own credentials to "
+            "run a coordinate live."
+        )
+
     def _read():
         user = os.environ.get("PRADAN_USERNAME") or os.environ.get("PRADAN_USER")
         password = os.environ.get("PRADAN_PASSWORD") or os.environ.get("PRADAN_PASS")
@@ -236,8 +257,22 @@ def _download_file(session: _IssdcSession, url: str, dest: Path, progress_cb: Pr
                                   timeout=(30, 600), allow_redirects=True) as r:
                 if r.status_code not in (200, 206):
                     raise RuntimeError(f"HTTP {r.status_code}")
-                mode = "ab" if resume_from and r.status_code == 206 else "wb"
-                downloaded = resume_from if mode == "ab" else 0
+
+                # A resumed request is only safe to append if the server really
+                # starts where we asked. Some servers answer 206 but stream from
+                # byte 0 regardless -- appending that duplicates the prefix and
+                # silently corrupts the file. Observed: a 713 MB CH2 zip that
+                # came out exactly 240 MB too large, whose central directory
+                # still parsed but whose .img member was unreadable because
+                # every stored offset had shifted. When the offset does not line
+                # up, throw the partial away and take the body from scratch.
+                append = False
+                if resume_from and r.status_code == 206:
+                    m = _CONTENT_RANGE_RE.search(r.headers.get("Content-Range", ""))
+                    append = bool(m) and int(m.group(1)) == resume_from
+
+                mode = "ab" if append else "wb"
+                downloaded = resume_from if append else 0
                 with open(partial, mode) as f:
                     for chunk in r.iter_content(chunk_size=CHUNK_SIZE):
                         if not chunk:
@@ -254,36 +289,30 @@ def _download_file(session: _IssdcSession, url: str, dest: Path, progress_cb: Pr
     return False
 
 
-def fetch_ch2_product(
-    lat: float, lon: float, instrument: str,
-    bbox: float = 0.2, progress_cb: ProgressCB | None = None,
-) -> Path | None:
-    """
-    Discover and download a calibrated CH2 product (TMC-2 or OHRC) covering
-    (lat, lon) directly from ISRO's ISSDC archive. Returns the downloaded
-    zip's path, or None if no matching/resolvable product was found (a
-    normal "no coverage here" outcome, not an error). Raises Ch2FetchError
-    for credential, login, or query failures.
-    """
-    username, password = _get_credentials()
-    # ISSDC's WFS uses -180..180 (west negative); the rest of the pipeline
-    # uses planetocentric 0-360 East.
-    wfs_lon = lon - 360 if lon > 180 else lon
+def _discover_ch2_candidates(
+    lat: float, lon: float, instrument: str, bbox: float,
+    wfs_session: "_IssdcSession", progress_cb: ProgressCB | None = None,
+) -> list[tuple[str, str]]:
+    """Return [(filename, pradan_url)] for calibrated products covering (lat, lon).
 
-    wfs_session = _IssdcSession(WFS_TRIGGER_URL, WFS_TRIGGER_URL, "chmapbrowse", username, password)
-    pradan_session = _IssdcSession(PRADAN_TRIGGER_URL, PRADAN_TRIGGER_URL, "pradan", username, password)
+    Shared by both the downloading and the streaming fetch so discovery logic
+    exists once.
+    """
+    # ISSDC's WFS uses -180..180 (west negative); the rest of the pipeline uses
+    # planetocentric 0-360 East.
+    wfs_lon = lon - 360 if lon > 180 else lon
 
     layers = CH2_LAYERS.get(instrument)
     if not layers:
-        return None
+        return []
     code = PRODUCT_CODE[instrument]
 
     min_lon, max_lon = wfs_lon - bbox, wfs_lon + bbox
     min_lat, max_lat = lat - bbox, lat + bbox
-    cql_filter = f"(BBOX(the_geom,{min_lon},{min_lat},{max_lon},{max_lat}))"
     params = {
         "service": "wfs", "version": "2.0.0", "request": "GetFeature",
-        "outputFormat": "application/json", "cql_filter": cql_filter,
+        "outputFormat": "application/json",
+        "cql_filter": f"(BBOX(the_geom,{min_lon},{min_lat},{max_lon},{max_lat}))",
         "typeName": ",".join(layers),
     }
     if progress_cb:
@@ -294,8 +323,8 @@ def fetch_ch2_product(
         raise Ch2FetchError("ISSDC WFS returned HTML instead of GeoJSON -- login likely failed.")
     features = r.json().get("features", [])
 
-    seen = set()
-    candidates = []
+    seen: set = set()
+    out: list[tuple[str, str]] = []
     for feature in features:
         props = feature.get("properties", {})
         pid = props.get("PRODUCT_ID")
@@ -304,32 +333,101 @@ def fetch_ch2_product(
         seen.add(pid)
         if _product_type(pid) != code or not _is_calibrated(feature):
             continue
-        candidates.append(feature)
-
-    if progress_cb:
-        progress_cb("resolve", len(candidates))
-    if not candidates:
-        return None
-
-    for feature in candidates:
-        props = feature.get("properties", {})
         filename = props.get("DOWNLOAD", "")
         if not filename:
             continue
         for relative_path in _candidate_pradan_paths(code, filename):
-            url = PRADAN_URL_PREFIX + relative_path
-            resolved, throttled = _probe_url(pradan_session, url)
-            if throttled:
-                time.sleep(PROBE_THROTTLE_BACKOFF)
-                resolved, _ = _probe_url(pradan_session, url)
-            if not resolved:
-                time.sleep(PROBE_INTER_DELAY)
-                continue
-            dest = CH2_DATA_DIR / filename
-            if progress_cb:
-                progress_cb("download", filename)
-            if _download_file(pradan_session, url, dest, progress_cb):
-                return dest
-        time.sleep(PROBE_INTER_DELAY)
+            out.append((filename, PRADAN_URL_PREFIX + relative_path))
 
+    if progress_cb:
+        progress_cb("resolve", len(out))
+    return out
+
+
+def _resolve_first_reachable(pradan_session, candidates, progress_cb=None):
+    """Probe candidate URLs in order, returning the first that actually serves."""
+    for filename, url in candidates:
+        resolved, throttled = _probe_url(pradan_session, url)
+        if throttled:
+            time.sleep(PROBE_THROTTLE_BACKOFF)
+            resolved, _ = _probe_url(pradan_session, url)
+        if resolved:
+            return filename, url
+        time.sleep(PROBE_INTER_DELAY)
+    return None, None
+
+
+def fetch_ch2_streamed(
+    lat: float, lon: float, instrument: str,
+    bbox: float = 0.2, progress_cb: ProgressCB | None = None, budget=None,
+    credentials: tuple[str, str] | None = None,
+):
+    """Open a CH2 product as a remote ZIP without downloading it.
+
+    PRADAN was measured to honour single byte-ranges (206 with an accurate
+    Content-Range), so only the ~0.8 MB geometry CSV is pulled up front. The
+    raster is inflated lazily and only as deep as the target scan line, instead
+    of transferring the whole 508 MB archive to read a few thousand rows.
+
+    Returns (filename, Ch2ZipStream) or (None, None) when nothing covers the
+    coordinate -- a normal outcome, not an error.
+    """
+    from lunar_matchbench.core.streaming import Ch2ZipStream
+
+    username, password = _get_credentials(credentials)
+    wfs_session = _IssdcSession(WFS_TRIGGER_URL, WFS_TRIGGER_URL, "chmapbrowse",
+                                username, password)
+    pradan_session = _IssdcSession(PRADAN_TRIGGER_URL, PRADAN_TRIGGER_URL, "pradan",
+                                   username, password)
+
+    candidates = _discover_ch2_candidates(lat, lon, instrument, bbox,
+                                          wfs_session, progress_cb)
+    filename, url = _resolve_first_reachable(pradan_session, candidates, progress_cb)
+    if url is None:
+        return None, None
+    if progress_cb:
+        progress_cb("stream", filename)
+    return filename, Ch2ZipStream.open(url, session=pradan_session.session,
+                                       budget=budget)
+
+
+def have_server_credentials() -> bool:
+    """Whether this deployment can fetch on its own account."""
+    try:
+        _get_credentials()
+        return True
+    except Ch2FetchError:
+        return False
+
+
+def fetch_ch2_product(
+    lat: float, lon: float, instrument: str,
+    bbox: float = 0.2, progress_cb: ProgressCB | None = None,
+) -> Path | None:
+    """
+    Discover and download a calibrated CH2 product (TMC-2 or OHRC) covering
+    (lat, lon) directly from ISRO's ISSDC archive. Returns the downloaded
+    zip's path, or None if no matching/resolvable product was found (a
+    normal "no coverage here" outcome, not an error). Raises Ch2FetchError
+    for credential, login, or query failures.
+
+    Prefer fetch_ch2_streamed; this transfers the entire archive and exists
+    for the case where a local copy is genuinely wanted.
+    """
+    username, password = _get_credentials()
+    wfs_session = _IssdcSession(WFS_TRIGGER_URL, WFS_TRIGGER_URL, "chmapbrowse",
+                                username, password)
+    pradan_session = _IssdcSession(PRADAN_TRIGGER_URL, PRADAN_TRIGGER_URL, "pradan",
+                                   username, password)
+
+    candidates = _discover_ch2_candidates(lat, lon, instrument, bbox,
+                                          wfs_session, progress_cb)
+    filename, url = _resolve_first_reachable(pradan_session, candidates, progress_cb)
+    if url is None:
+        return None
+    dest = CH2_DATA_DIR / filename
+    if progress_cb:
+        progress_cb("download", filename)
+    if _download_file(pradan_session, url, dest, progress_cb):
+        return dest
     return None

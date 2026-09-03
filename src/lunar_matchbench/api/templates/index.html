@@ -3,126 +3,228 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lunar-MatchBench | Cross-Mission Image Registration</title>
+  <title>Lunar-MatchBench &mdash; Cross-Mission Registration Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=4" />
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400;62..125,600;62..125,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=5" />
+  <link rel="stylesheet" href="/static/css/console.css?v=5" />
+  <link rel="stylesheet" href="/static/css/panels.css?v=5" />
 </head>
 <body>
-  <header>
-    <div class="masthead">
-      <div class="wordmark">
-        <span class="wordmark-mark">LM</span>
-        <div>
-          <h1>Lunar&#8209;MatchBench</h1>
-          <p class="tagline">Chandrayaan&#8209;2 &#8596; NASA LROC NAC Cross&#8209;Mission Registration</p>
-        </div>
-      </div>
-      <div class="badge-row">
-        <span class="badge badge-isro">ISRO CH2</span>
-        <span class="badge badge-nasa">NASA LRO</span>
-        <span class="badge badge-xfeat">XFeat · CVPR 2024</span>
-      </div>
+  <canvas id="sky" aria-hidden="true"></canvas>
+
+  <header class="statusbar">
+    <div class="wordmark">
+      <b>Lunar&#8209;MatchBench</b>
+      <span class="route num">
+        <span class="from">CH2 TMC&#8209;2</span>
+        <span class="arrow">&rarr;</span>
+        <span class="to">LROC NAC</span>
+      </span>
     </div>
+    <span class="chip" id="status-chip" data-state="idle">
+      <span class="dot"></span><span id="status-text">Idle</span>
+    </span>
   </header>
 
-  <main>
-    <section class="card form-card">
-      <h2>Registration Parameters</h2>
-      <form id="reg-form">
-        <div class="field-grid">
-          <div class="field">
-            <label for="lat">Latitude (&deg;N)</label>
-            <input type="number" id="lat" name="lat" step="any" min="-90" max="90"
-                   value="15.0" placeholder="e.g. 15.0" required />
-            <span class="hint">Planetocentric, &minus;90 to +90</span>
-          </div>
-          <div class="field">
-            <label for="lon">Longitude (&deg;E)</label>
-            <input type="number" id="lon" name="lon" step="any" min="0" max="360"
-                   value="289.2" placeholder="e.g. 289.2" required />
-            <span class="hint">0 &ndash; 360 East</span>
-          </div>
-          <div class="field">
-            <label for="instrument">CH2 Instrument</label>
-            <select id="instrument" name="instrument">
-              <option value="tmc" selected>TMC-2 (5 m/px, wide)</option>
-              <option value="ohrc">OHRC (0.25 m/px, high-res)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="matcher">Feature Matcher</label>
-            <select id="matcher" name="matcher">
-              <option value="xfeat" selected>XFeat (CVPR 2024)</option>
-              <option value="sift">SIFT (classical baseline)</option>
-            </select>
-          </div>
-        </div>
-        <div class="presets">
-          <span class="preset-label">Quick presets</span>
-          <button type="button" class="preset-btn" data-lat="15.0" data-lon="289.2">Oceanus Procellarum</button>
-          <button type="button" class="preset-btn" data-lat="17.0333751" data-lon="289.071357">Procellarum North (17.0&deg;N)</button>
-          <button type="button" class="preset-btn" data-lat="5.17879877" data-lon="288.954173">Rayed Crater (5.2&deg;N)</button>
-          <button type="button" class="preset-btn preset-btn--fail" data-lat="3.613415864967716" data-lon="289.12239203822105">Known Failure Case (3.6&deg;N)</button>
-        </div>
-        <button type="submit" id="run-btn" class="run-btn">
-          <span id="btn-text">Run Registration</span>
-        </button>
-      </form>
-    </section>
+  <main class="console">
+    <aside class="rail" id="locator" aria-label="LROC scan-line strip locator"></aside>
 
-    <section class="card pipeline-card" id="pipeline-card" hidden>
-      <h2>Pipeline Execution</h2>
-      <ol class="stepper" id="stepper">
-        <li class="step" id="step-1"><span class="step-dot"></span><span class="step-label">Locate CH2 patch</span></li>
-        <li class="step" id="step-2"><span class="step-dot"></span><span class="step-label">Query NASA ODE</span></li>
-        <li class="step" id="step-3"><span class="step-dot"></span><span class="step-label">Download LROC NAC</span></li>
-        <li class="step" id="step-4"><span class="step-dot"></span><span class="step-label">Extract patch</span></li>
-        <li class="step" id="step-5"><span class="step-dot"></span><span class="step-label">Detect keypoints</span></li>
-        <li class="step" id="step-6"><span class="step-dot"></span><span class="step-label">Match features</span></li>
-        <li class="step" id="step-7"><span class="step-dot"></span><span class="step-label">MAGSAC++ verify</span></li>
-        <li class="step" id="step-8"><span class="step-dot"></span><span class="step-label">Finalize</span></li>
-      </ol>
-      <p class="status-msg" id="status-msg">Initializing&hellip;</p>
+    <div class="work">
+      <section class="panel">
+        <header>
+          <span class="eyebrow">Target</span>
+          <h2>Where on the Moon</h2>
+        </header>
+        <p class="panel-lede">
+          Enter any lunar coordinate. The engine finds the Chandrayaan-2 image that
+          covers it, finds a NASA LROC NAC image of the same ground, and measures how
+          precisely the two line up &mdash; streaming only the bytes it needs from
+          each archive.
+        </p>
+        <form id="run-form">
+          <div class="field-grid">
+            <div class="field">
+              <label for="lat">Latitude &deg;N</label>
+              <input type="number" id="lat" step="any" min="-90" max="90" value="15.0" required />
+              <span class="hint">&minus;90 to +90, planetocentric</span>
+            </div>
+            <div class="field">
+              <label for="lon">Longitude &deg;E</label>
+              <input type="number" id="lon" step="any" min="0" max="360" value="289.2" required />
+              <span class="hint">0 to 360 east</span>
+            </div>
+            <div class="field">
+              <label for="instrument">CH2 instrument</label>
+              <select id="instrument">
+                <option value="tmc" selected>TMC-2 &mdash; 5 m/px</option>
+                <option value="ohrc">OHRC &mdash; 0.25 m/px</option>
+              </select>
+              <span class="hint">Which camera to register</span>
+            </div>
+            <div class="field">
+              <label for="matcher">Matcher</label>
+              <select id="matcher">
+                <option value="xfeat" selected>XFeat</option>
+                <option value="sift">SIFT</option>
+              </select>
+              <span class="hint">Learned, or classical baseline</span>
+            </div>
+          </div>
+          <div class="form-actions">
+            <div class="presets">
+              <span class="eyebrow">Try</span>
+              <button type="button" class="preset" data-lat="15.0" data-lon="289.2">Oceanus Procellarum</button>
+              <button type="button" class="preset" data-lat="10.2" data-lon="289.5">Sinus Aestuum</button>
+              <button type="button" class="preset" data-lat="5.17879877" data-lon="288.954173">Rayed crater 5.2&deg;N</button>
+              <button type="button" class="preset" data-lat="3.613415864967716" data-lon="289.12239203822105">Known failure 3.6&deg;N</button>
+            </div>
+            <button type="submit" class="run" id="run-btn">Run registration</button>
+          </div>
 
-      <div class="stage-viewer" id="stage-viewer" hidden>
-        <div class="stage-head">
-          <span class="stage-index" id="stage-index"></span>
-          <span class="stage-title" id="stage-title"></span>
-          <span class="stage-desc" id="stage-desc"></span>
-          <span class="stage-counter" id="stage-counter"></span>
-        </div>
-        <div class="stage-frame">
-          <img id="stage-img-a" class="stage-img" alt="" />
-          <img id="stage-img-b" class="stage-img" alt="" />
-          <button type="button" class="stage-nav stage-nav--prev" id="stage-prev" aria-label="Previous step">&#8249;</button>
-          <button type="button" class="stage-nav stage-nav--next" id="stage-next" aria-label="Next step">&#8250;</button>
-        </div>
-      </div>
-    </section>
+          <div class="deploy-note" id="deploy-note" hidden></div>
 
-    <section class="card summary-card" id="summary-card" hidden>
-      <h2 id="summary-title">Registration Result</h2>
-      <div class="metrics-row" id="metrics-row"></div>
-      <p class="error-msg-text" id="error-msg" hidden></p>
-      <details class="provenance-details" id="provenance-details">
-        <summary>Scientific provenance &amp; ephemeris</summary>
-        <pre id="provenance-pre"></pre>
-      </details>
-      <button id="retry-btn" class="run-btn secondary">Try Another Coordinate</button>
-    </section>
+          <details class="account" id="account" hidden>
+            <summary>Use my own ISSDC account &mdash; run any coordinate live</summary>
+            <p class="account-lede">
+              Chandrayaan-2 data comes from ISRO&rsquo;s ISSDC archive, which requires an
+              account. Enter yours to fetch any coordinate live. It is used for this
+              request only &mdash; never stored, never logged, and never written to the
+              saved run.
+            </p>
+            <div class="account-grid">
+              <div class="field">
+                <label for="issdc-user">ISSDC username</label>
+                <input type="text" id="issdc-user" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="field">
+                <label for="issdc-pass">ISSDC password</label>
+                <input type="password" id="issdc-pass" autocomplete="off" />
+              </div>
+            </div>
+            <p class="account-warn" id="account-warn" hidden></p>
+            <p class="account-lede">
+              No account? <a href="https://pradan.issdc.gov.in/" target="_blank"
+              rel="noopener">Register at ISSDC PRADAN</a>. Without one you can still run
+              the preset coordinates above.
+            </p>
+          </details>
+        </form>
+      </section>
+
+      <!-- Shown until the first run, so the console explains itself instead of
+           presenting empty panels. -->
+      <section class="panel intro" id="intro">
+        <header>
+          <span class="eyebrow">How to read this</span>
+          <h2>What the console shows you</h2>
+        </header>
+        <div class="intro-grid">
+          <article>
+            <h3>1 &middot; Find the same ground twice</h3>
+            <p>
+              Chandrayaan-2 and NASA's LRO both photographed the whole Moon, years apart,
+              at different resolutions and sun angles. The engine locates your coordinate
+              in each mission's imagery independently.
+            </p>
+          </article>
+          <article>
+            <h3>2 &middot; Lock onto the right scan line</h3>
+            <p>
+              Both cameras are pushbroom scanners: an LROC image is tens of thousands of
+              single lines. The rail on the left shows which line was chosen, how far it
+              drifted from the orbital-geometry estimate, and how much of the strip was
+              searched. Drag it to look anywhere in the product.
+            </p>
+          </article>
+          <article>
+            <h3>3 &middot; Match, then throw out the bad matches</h3>
+            <p>
+              Thousands of candidate correspondences are proposed, then MAGSAC++ keeps
+              only those that agree on one consistent transform. Kept points are solid
+              discs, rejected ones hollow rings.
+            </p>
+          </article>
+          <article>
+            <h3>4 &middot; Judge the result honestly</h3>
+            <p>
+              Every figure comes from the run itself. A failure says whether the whole
+              strip was searched &mdash; a real mismatch &mdash; or only part of it,
+              which proves nothing either way.
+            </p>
+          </article>
+        </div>
+        <dl class="glossary">
+          <div><dt>Inlier tie-points</dt><dd>Correspondences that survived geometric verification. More is better; these are what the alignment rests on.</dd></div>
+          <div><dt>Reprojection RMSE</dt><dd>Average pixel error when a kept point is pushed through the fitted transform. Below about 2 px is a good cross-mission result.</dd></div>
+          <div><dt>Spatial coverage</dt><dd>How much of the patch has tie-points in it. High coverage means the alignment holds across the whole frame, not just one crater.</dd></div>
+          <div><dt>Scan-line lock</dt><dd>Whether the reference position was confirmed visually or is only the orbital-geometry estimate. An unverified lock makes any failure inconclusive.</dd></div>
+        </dl>
+      </section>
+
+      <section class="panel" id="stage" hidden>
+        <header>
+          <span class="eyebrow">Alignment</span>
+          <h2>Do they line up</h2>
+          <div class="stage-tools" id="stage-tools"></div>
+        </header>
+        <div id="stage-body"></div>
+      </section>
+
+      <section class="panel" id="panels" hidden>
+        <header>
+          <span class="eyebrow">Evidence</span>
+          <h2>How well, and how sure</h2>
+        </header>
+        <div id="diagnosis"></div>
+        <div id="metrics"></div>
+        <div id="charts"></div>
+        <div id="transform"></div>
+        <div id="context"></div>
+        <details class="prov">
+          <summary>Provenance &amp; ephemeris</summary>
+          <pre id="prov-pre" class="num"></pre>
+        </details>
+      </section>
+    </div>
   </main>
 
-  <footer>
-    <p>SIH26166 &middot; Space Technology &middot; ISRO &middot; IIT Madras BS Programme</p>
-    <p>Data: <a href="https://chmapbrowse.issdc.gov.in/" target="_blank">ISRO ISSDC</a>
-       &nbsp;&middot;&nbsp;
-       <a href="https://oderest.rsl.wustl.edu/" target="_blank">NASA ODE</a>
-       &nbsp;&middot;&nbsp;
-       <a href="https://github.com/verlab/accelerated_features" target="_blank">XFeat</a>
+  <footer class="siteftr">
+    <div class="ftr-inner">
+      <div class="ftr-brand">
+        <b>Lunar&#8209;MatchBench</b>
+        <p>
+          Cross-mission optical image registration for
+          <strong>SIH 2026 &middot; ISRO problem SIH26166</strong>.
+          Built by team Alibaba and 6 devs, IIT Madras BS Programme.
+        </p>
+      </div>
+      <div class="ftr-col">
+        <span class="eyebrow">Data sources</span>
+        <a href="https://chmapbrowse.issdc.gov.in/" target="_blank" rel="noopener">ISRO ISSDC / PRADAN</a>
+        <a href="https://oderest.rsl.wustl.edu/" target="_blank" rel="noopener">NASA ODE REST API</a>
+        <a href="https://pds.lroc.im-ldi.com/" target="_blank" rel="noopener">LROC PDS archive</a>
+      </div>
+      <div class="ftr-col">
+        <span class="eyebrow">Method</span>
+        <a href="https://github.com/verlab/accelerated_features" target="_blank" rel="noopener">XFeat &mdash; CVPR 2024</a>
+        <span>MAGSAC++ homography</span>
+        <span>HTTP byte-range streaming</span>
+      </div>
+      <div class="ftr-col">
+        <span class="eyebrow">Instruments</span>
+        <span><i class="ftr-dot ftr-dot--isro"></i>Chandrayaan-2 TMC-2 &middot; 5 m/px</span>
+        <span><i class="ftr-dot ftr-dot--isro"></i>Chandrayaan-2 OHRC &middot; 0.25 m/px</span>
+        <span><i class="ftr-dot ftr-dot--nasa"></i>LRO LROC NAC &middot; ~1 m/px</span>
+      </div>
+    </div>
+    <p class="ftr-note num">
+      Reference imagery courtesy NASA/GSFC/Arizona State University &middot;
+      Chandrayaan-2 data courtesy ISRO/ISSDC
     </p>
   </footer>
-  <script src="/static/app.js?v=3"></script>
+
+  <script type="module" src="/static/js/main.js?v=5"></script>
 </body>
 </html>

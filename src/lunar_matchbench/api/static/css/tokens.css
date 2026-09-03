@@ -1,0 +1,94 @@
+/* Lunar-MatchBench design tokens.
+
+   Colour encodes mission provenance: --isro is always Chandrayaan-2, --nasa is
+   always LROC NAC. Neither is ever used decoratively, so a coloured mark on
+   this page always answers "which spacecraft did this pixel come from".
+
+   The ground is a deep blue-black rather than pure black, and the chrome stays
+   low-contrast on purpose: the greyscale lunar imagery is the content, and it
+   should be the brightest thing on screen. */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --void:    #05070B;
+  --panel:   #121820;
+  --panel-2: #0E141B;
+  --rule:    #1E2833;
+  --signal:  #E8EDF2;
+  --muted:   #7A8794;
+  --isro:    #FF7A45;
+  --nasa:    #5B9CFF;
+  --good:    #3FD68C;
+  --warn:    #FFC14D;
+  --bad:     #FF5C5C;
+
+  --display: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --body:    "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono:    "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+
+  --rail-w: 152px;
+  --gap: 18px;
+}
+
+html { color-scheme: dark; }
+
+body {
+  background: var(--void);
+  color: var(--signal);
+  font-family: var(--body);
+  font-size: 14px;
+  line-height: 1.55;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The type personality is the distance between these two: wide hairline caps
+   for silkscreen labels, and heavy numerals for readouts. Same family, opposite
+   ends of its width and weight axes. */
+.eyebrow {
+  font-family: var(--display);
+  font-weight: 400;
+  font-stretch: 125%;
+  font-size: 10px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: block;
+}
+
+.readout {
+  font-family: var(--display);
+  font-weight: 700;
+  font-stretch: 112%;
+  font-size: 28px;
+  line-height: 1;
+  letter-spacing: -.01em;
+}
+
+/* Numbers update in place as a run streams; tabular figures stop them jittering. */
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+:where(a, button, input, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--nasa);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+/* The ambient sky sits behind everything and never intercepts a pointer. */
+#sky {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  z-index: 0; pointer-events: none;
+}
+.statusbar, .console, .siteftr { position: relative; z-index: 1; }
+/* Panels are translucent so the sky reads behind them without washing out
+   the imagery they contain. */
+.panel, .rail { background: color-mix(in srgb, var(--panel) 82%, transparent); backdrop-filter: blur(10px); }

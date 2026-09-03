@@ -200,6 +200,16 @@ def register(
     mask_flat = mask.ravel().astype(bool)
     n_inliers = int(mask_flat.sum())
     stage_data["inlier_mask"] = mask_flat.tolist()
+
+    # Reprojection error for EVERY raw match, not just the inliers. The inlier
+    # subset alone is a censored distribution -- presenting it as "the" error
+    # histogram would flatter the result by hiding precisely the matches RANSAC
+    # threw out. Computed here, before the inlier-count gate, so a run that
+    # fails still carries the evidence of how it failed.
+    all_proj = cv2.perspectiveTransform(pts_m.reshape(-1, 1, 2), H).reshape(-1, 2)
+    all_resid = np.sqrt(np.sum((all_proj - pts_r) ** 2, axis=1))
+    stage_data["residuals_px"] = [round(float(v), 4) for v in all_resid]
+
     if n_inliers < MIN_INLIERS:
         return {"status": "FAILED", "reason": f"Only {n_inliers} inliers (< {MIN_INLIERS}).", **stage_data}
 
@@ -207,8 +217,9 @@ def register(
     in_m = pts_m[mask_flat]
     in_r = pts_r[mask_flat]
 
-    proj = cv2.perspectiveTransform(in_m.reshape(-1, 1, 2), H).reshape(-1, 2)
-    rmse = float(np.sqrt(np.mean(np.sum((proj - in_r) ** 2, axis=1))))
+    # Same residual array the UI plots, restricted to the kept points, so the
+    # headline RMSE and the histogram can never tell different stories.
+    rmse = float(np.sqrt(np.mean(all_resid[mask_flat] ** 2)))
     uniformity = _spatial_uniformity(in_r, h, w)
 
     elapsed = round(time.perf_counter() - t0, 3)

@@ -24,13 +24,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from lunar_matchbench.config import (
-    PATCH_SIZE, POSTER_DIR, OVERLAP_DIR, INSTRUMENT_META, ensure_dirs,
+    PATCH_SIZE, POSTER_DIR, OVERLAP_DIR, INSTRUMENT_META, RUN_BYTE_BUDGET,
+    ensure_dirs,
 )
 from lunar_matchbench.core.downloader import (
     find_ch2_geometry_match, extract_ch2_patch,
-    discover_lroc_products, download_lroc, extract_lroc_patch,
+    discover_lroc_products, open_lroc_reader, extract_lroc_patch,
+    find_ch2_geometry_match_streamed,
 )
-from lunar_matchbench.core.ch2_fetch import fetch_ch2_product, Ch2FetchError
+from lunar_matchbench.core.ch2_fetch import fetch_ch2_streamed, Ch2FetchError
+from lunar_matchbench.core.streaming import TransferBudget, TransferBudgetExceeded
 from lunar_matchbench.core.register import register
 from lunar_matchbench.utils.geo import BBox, overlap_report
 from lunar_matchbench.utils.image import make_checkerboard, make_difference_overlay
@@ -70,6 +73,61 @@ def _footer(fig, text: str):
     fig.text(0.03, 0.012, text, color=INK_MUTED, fontsize=8, ha="left", family="monospace")
 
 
+def _save_raw_patches(ch2, lroc, result: dict, label: str) -> dict:
+    """Write bare patch PNGs -- no titles, axes or chrome -- for the browser.
+
+    The matplotlib posters stay the scientific record. These are the pixels the
+    interactive comparator and tie-point overlay composite directly, so they
+    must carry no annotation of their own.
+    """
+    out_dir = POSTER_DIR / "raw"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # The comparator overlays these two directly, so a size mismatch would show
+    # up as a misalignment that the registration did not actually make. Both
+    # already come out of the extractors at PATCH_SIZE; this makes that a
+    # guarantee rather than a coincidence of two separate code paths.
+    if ch2.shape[:2] != lroc.shape[:2]:
+        h, w = lroc.shape[:2]
+        ch2 = cv2.resize(ch2, (w, h), interpolation=cv2.INTER_AREA)
+
+    paths = {"ch2": out_dir / f"{label}_ch2.png", "lroc": out_dir / f"{label}_lroc.png"}
+    cv2.imwrite(str(paths["ch2"]), ch2)
+    cv2.imwrite(str(paths["lroc"]), lroc)
+    if result.get("status") == "SUCCESS" and result.get("homography") is not None:
+        h, w = lroc.shape[:2]
+        H = np.array(result["homography"])
+        warped = cv2.warpPerspective(ch2, H, (w, h))
+        # Warping rotates part of the CH2 frame out of view, and warpPerspective
+        # fills that with black. Saved as plain grey it is indistinguishable from
+        # genuinely dark terrain, so an overlay or difference view lights the
+        # whole empty band up as if it were a huge misalignment. Carry the
+        # footprint in the alpha channel instead, so "no data" stays "no data".
+        mask = cv2.warpPerspective(
+            np.full(ch2.shape[:2], 255, np.uint8), H, (w, h), flags=cv2.INTER_NEAREST)
+        rgba = cv2.cvtColor(warped, cv2.COLOR_GRAY2BGRA)
+        rgba[:, :, 3] = mask
+        paths["warped"] = out_dir / f"{label}_warped.png"
+        cv2.imwrite(str(paths["warped"]), rgba)
+    return {k: str(v) for k, v in paths.items()}
+
+
+def _transfer_snapshot(reader) -> dict:
+    """Byte accounting for the UI, so "fetched 38.7 MB of 529 MB" is a fact.
+
+    A local cached product reports zeros with product_bytes 0, which is how the
+    UI tells "served from disk" apart from "streamed over the network".
+    """
+    stats = getattr(reader, "stats", {}) or {}
+    rf = getattr(reader, "rf", None)
+    return {
+        "fetched_bytes": stats.get("fetched_bytes", 0),
+        "cached_bytes":  stats.get("cached_bytes", 0),
+        "requests":      stats.get("requests", 0),
+        "product_bytes": getattr(rf, "size", 0) if rf is not None else 0,
+    }
+
+
 def run_pipeline(
     lat: float,
     lon: float,
@@ -77,6 +135,7 @@ def run_pipeline(
     matcher: str = "xfeat",
     job_id: str | None = None,
     progress_cb=None,
+    credentials: tuple[str, str] | None = None,
 ) -> dict:
     """
     Full registration pipeline.
@@ -98,13 +157,18 @@ def run_pipeline(
     label = job_id or f"lat{lat}_lon{lon}_{instrument}"
     step_images: dict[str, str] = {}
 
+    transfer: dict = {"fetched_bytes": 0, "cached_bytes": 0,
+                      "requests": 0, "product_bytes": 0}
+    # One shared ceiling for the whole run, across every product it touches.
+    budget = TransferBudget(RUN_BYTE_BUDGET)
+
     def _progress(step: int, msg: str):
         if progress_cb:
             # step_images is mutated in place as each artefact is written, so
             # passing it by reference here means every call carries whatever
             # is ready so far -- a status poll mid-run sees images appear
             # incrementally, not all at once at the very end.
-            progress_cb(step, total_steps, msg, dict(step_images))
+            progress_cb(step, total_steps, msg, dict(step_images), dict(transfer))
 
     # ── 1. CH2 patch ──────────────────────────────────────────────────────────
     _progress(1, "Locating Chandrayaan-2 patch...")
@@ -121,16 +185,23 @@ def run_pipeline(
                 _progress(1, f"Resolving PRADAN download path ({detail} candidate product(s))...")
             elif stage == "download":
                 _progress(1, f"Downloading {detail} from ISSDC/PRADAN...")
+            elif stage == "stream":
+                _progress(1, f"Streaming {detail} from ISSDC/PRADAN (byte-range)...")
             elif stage == "downloading":
                 _progress(1, f"Downloading from ISSDC/PRADAN... {detail / 1e6:.1f} MB")
 
         try:
-            fetched = fetch_ch2_product(lat, lon, instrument, progress_cb=_fetch_cb)
+            _, zstream = fetch_ch2_streamed(lat, lon, instrument,
+                                            progress_cb=_fetch_cb, budget=budget,
+                                            credentials=credentials)
         except Ch2FetchError as exc:
             return {"status": "FAILED", "reason": f"Could not fetch Chandrayaan-2 data from ISSDC: {exc}"}
+        except TransferBudgetExceeded as exc:
+            return {"status": "FAILED", "reason": f"Transfer budget exhausted reading CH2 data: {exc}"}
 
-        if fetched is not None:
-            ch2_match = find_ch2_geometry_match(lat, lon, instrument)
+        if zstream is not None:
+            _progress(1, "Reading CH2 geometry grid (0.8 MB of 508 MB)...")
+            ch2_match = find_ch2_geometry_match_streamed(zstream, lat, lon, instrument)
 
     if ch2_match is None:
         return {
@@ -164,9 +235,10 @@ def run_pipeline(
     lroc_gsd = scale = None
     loc_info = None
     skipped = []
+    budget_error = None
     for candidate in candidates[:MAX_CANDIDATE_ATTEMPTS]:
-        _progress(3, f"Downloading LROC NAC {candidate['filename']}...")
-        path = download_lroc(candidate, verbose=True)
+        _progress(3, f"Opening LROC NAC {candidate['filename']} (byte-range stream)...")
+        path = open_lroc_reader(candidate, budget=budget)
 
         _progress(4, "Extracting co-located LROC NAC patch...")
         # Prefer the actual per-product resolution (CH2's own PDS4 label,
@@ -175,19 +247,28 @@ def run_pipeline(
         # acquisition and the config constant is only a rough average.
         candidate_gsd = candidate.get("gsd_m")
         candidate_scale = (ch2_gsd / candidate_gsd) if candidate_gsd else INSTRUMENT_META[instrument]["scale_factor"]
-        patch, candidate_loc_info = extract_lroc_patch(
-            path, candidate, lat, lon,
-            ref_patch=ch2_patch, scale_factor=candidate_scale,
-        )
+        try:
+            patch, candidate_loc_info = extract_lroc_patch(
+                path, candidate, lat, lon,
+                ref_patch=ch2_patch, scale_factor=candidate_scale,
+            )
+        except TransferBudgetExceeded as exc:
+            # Stop the candidate sweep rather than letting each further
+            # candidate re-raise; the budget is shared and already spent.
+            budget_error = str(exc)
+            break
         if patch is not None:
             best, lroc_path, lroc_patch = candidate, path, patch
             lroc_gsd, scale, loc_info = candidate_gsd, candidate_scale, candidate_loc_info
+            transfer.update(_transfer_snapshot(path))
             break
         skipped.append(candidate["filename"])
 
     if lroc_patch is None:
         reason = "Failed to extract a usable LROC patch."
-        if skipped:
+        if budget_error:
+            reason = f"Transfer budget exhausted while reading LROC data: {budget_error}"
+        elif skipped:
             reason += f" Skipped {len(skipped)} unusable candidate(s) (no real surface content found): {', '.join(skipped)}."
         return {"status": "FAILED", "reason": reason}
 
@@ -204,11 +285,21 @@ def run_pipeline(
         "ch2_scan_line": ch2_match["scan"],
         "ch2_pixel_col": ch2_match["pixel"],
         "ch2_gsd_m": ch2_gsd,
+        "ch2_product": ch2_match.get("product", ""),
+        "ch2_start_time": ch2_match.get("start_time", ""),
         "lroc_product_id": best["pds_id"],
         "lroc_filename": best["filename"],
         "lroc_gsd_m": lroc_gsd,
         "scale_factor_used": round(scale, 3),
         "lroc_start_time": best["start_time"],
+        "footprint": {
+            **overlap_report(_ch2_bbox(lat, lon), _lroc_bbox(best)),
+            "target": {"lat": lat, "lon": lon},
+            "ch2_half_deg": CH2_PATCH_HALF_DEG,
+            "lroc_filename": best["filename"],
+        },
+        "lroc_total_candidates": len(candidates),
+        "lroc_candidates_tried": len(skipped) + 1,
         "ch2_patch_sha256": hashlib.sha256(ch2_patch.tobytes()).hexdigest()[:16] + "...",
         "lroc_patch_sha256": hashlib.sha256(lroc_patch.tobytes()).hexdigest()[:16] + "...",
         # Whether the LROC scan-line locking found a confident visual
@@ -238,17 +329,32 @@ def run_pipeline(
     if result["status"] != "SUCCESS":
         reason = result.get("reason", "Registration failed.")
         if loc_info and not loc_info["confident"]:
-            reason += (
-                f" (Localization was NOT confident -- best coarse-scan peak was only "
-                f"{loc_info['best_n']} matches, below the {loc_info['min_confident_matches']} "
-                f"threshold, so this patch is the raw geometry estimate, not a visually "
-                f"verified location. This failure may reflect a mislocalized patch rather "
-                f"than a genuine content/illumination mismatch.)"
-            )
+            pct = int(round(loc_info.get("strip_fraction_searched", 0) * 100))
+            if loc_info.get("whole_strip_searched"):
+                reason += (
+                    f" (The ENTIRE LROC strip was searched -- {loc_info.get('lines_searched', 0)} "
+                    f"of {loc_info.get('total_lines', 0)} lines, {pct}% -- and no location "
+                    f"correlated above {loc_info['min_confident_matches']} matches "
+                    f"(best was {loc_info['best_n']}). This is a genuine content or "
+                    f"illumination mismatch, not a mislocalized patch.)"
+                )
+            else:
+                reason += (
+                    f" (Localization was NOT confident -- best coarse-scan peak was only "
+                    f"{loc_info['best_n']} matches, below the {loc_info['min_confident_matches']} "
+                    f"threshold, and only {pct}% of the strip was searched, so this patch is "
+                    f"the raw geometry estimate rather than a visually verified location. "
+                    f"This failure may reflect a mislocalized patch rather than a genuine "
+                    f"content/illumination mismatch.)"
+                )
         step_images["final"] = str(_step_failed(ch2_patch, lroc_patch, result, reason, label))
         return {
             "status":      "FAILED",
             "reason":      reason,
+            "transfer":    dict(transfer),
+            "register_result": result,
+            "lroc_candidate": best,
+            "raw_patches": _save_raw_patches(ch2_patch, lroc_patch, result, label),
             "step_images": step_images,
             "overlap_map_path": str(overlap_path),
             "provenance":  prov,
@@ -258,6 +364,10 @@ def run_pipeline(
 
     return {
         "status":      "SUCCESS",
+        "transfer":    dict(transfer),
+        "register_result": result,
+        "lroc_candidate": best,
+        "raw_patches": _save_raw_patches(ch2_patch, lroc_patch, result, label),
         "metrics":     {
             "matcher":            result["matcher"],
             "n_inliers":          result["n_inliers"],
@@ -506,6 +616,22 @@ def _wrap(text: str, width: int) -> list[str]:
     return textwrap.wrap(text, width=width) or [""]
 
 
+# Rough extent of a CH2 patch on the ground: ~0.085 deg, about 5 km at the
+# equator. Shared by the rendered map and the footprint payload the console
+# draws from, so the picture and the numbers cannot disagree.
+CH2_PATCH_HALF_DEG = 0.085
+
+
+def _ch2_bbox(lat: float, lon: float) -> BBox:
+    return BBox(lat - CH2_PATCH_HALF_DEG, lat + CH2_PATCH_HALF_DEG,
+                lon - CH2_PATCH_HALF_DEG, lon + CH2_PATCH_HALF_DEG)
+
+
+def _lroc_bbox(candidate: dict) -> BBox:
+    return BBox(candidate["lat_min"], candidate["lat_max"],
+                candidate["lon_min"], candidate["lon_max"])
+
+
 def _make_overlap_map(
     ch2_match: dict, lroc_candidate: dict,
     lat: float, lon: float, label: str,
@@ -515,13 +641,8 @@ def _make_overlap_map(
     OVERLAP_DIR.mkdir(parents=True, exist_ok=True)
     out = OVERLAP_DIR / f"overlap_{label}.png"
 
-    # Use small estimate for the CH2 patch bbox (~0.085° ≈ 5 km at equator)
-    HALF = 0.085
-    ch2_box  = BBox(lat - HALF, lat + HALF, lon - HALF, lon + HALF)
-    lroc_box = BBox(
-        lroc_candidate["lat_min"], lroc_candidate["lat_max"],
-        lroc_candidate["lon_min"], lroc_candidate["lon_max"],
-    )
+    ch2_box  = _ch2_bbox(lat, lon)
+    lroc_box = _lroc_bbox(lroc_candidate)
     report = overlap_report(ch2_box, lroc_box)
     inter  = ch2_box.intersect(lroc_box)
 
@@ -539,7 +660,7 @@ def _make_overlap_map(
     _rect(lroc_box, LROC_ACCENT, LROC_ACCENT, 0.12,
           f"LROC NAC  {lroc_candidate['filename']}")
     _rect(ch2_box, CH2_ACCENT, CH2_ACCENT, 0.30,
-          f"CH2 Patch (±{HALF:.3f}°)")
+          f"CH2 Patch (±{CH2_PATCH_HALF_DEG:.3f}°)")
     if inter:
         _rect(inter, GOOD_COLOR, GOOD_COLOR, 0.45,
               f"Overlap  {report['overlap_area_km2']} km² ({report['ch2_overlap_pct']}%)")

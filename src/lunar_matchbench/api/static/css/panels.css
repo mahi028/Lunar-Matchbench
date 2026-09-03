@@ -1,0 +1,306 @@
+/* Result panels: comparator, tie-point overlay, evidence rows, charts. */
+
+.stage-tools { margin-left: auto; display: flex; gap: 6px; }
+.tool {
+  background: transparent; border: 1px solid var(--rule); border-radius: 3px;
+  color: var(--muted); font-family: var(--body); font-size: 11.5px;
+  padding: 4px 10px; cursor: pointer; transition: border-color .15s, color .15s;
+}
+.tool:hover { color: var(--signal); }
+.tool[aria-pressed="true"] { border-color: var(--nasa); color: var(--signal); }
+
+/* ── comparator ──────────────────────────────────────────────────────── */
+.cmp {
+  position: relative; display: grid; width: 100%;
+  background: var(--panel-2); border: 1px solid var(--rule); border-radius: 3px;
+  overflow: hidden; touch-action: none; cursor: ew-resize;
+  min-height: 180px;
+}
+.cmp-img {
+  grid-area: 1 / 1; width: 100%; height: auto; display: block;
+  user-select: none; -webkit-user-drag: none;
+}
+
+/* Swipe: the registered CH2 layer is revealed left of the split. */
+.cmp[data-mode="swipe"] .cmp-img[data-layer="moving"] {
+  clip-path: inset(0 calc(100% - var(--split) * 100%) 0 0);
+}
+.cmp[data-mode="swipe"] .cmp-handle {
+  position: absolute; top: 0; bottom: 0;
+  left: calc(var(--split) * 100%); width: 2px; margin-left: -1px;
+  background: var(--signal); cursor: ew-resize;
+}
+.cmp[data-mode="swipe"] .cmp-handle::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 26px; height: 26px; transform: translate(-50%, -50%);
+  border: 2px solid var(--signal); border-radius: 50%;
+  background: color-mix(in srgb, var(--void) 55%, transparent);
+}
+
+/* Fade: an opacity cross-dissolve instead of a hard edge. Some misalignments
+   read more clearly as a ghost than as a seam. */
+.cmp[data-mode="fade"] .cmp-img[data-layer="moving"] { opacity: var(--split); }
+.cmp[data-mode="fade"] { cursor: default; }
+.cmp[data-mode="fade"] .cmp-handle {
+  position: absolute; inset: auto 0 0 0; height: 0; opacity: 0;
+}
+
+.cmp-tag {
+  position: absolute; bottom: 10px; padding: 3px 9px; border-radius: 100px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em;
+  background: color-mix(in srgb, var(--void) 72%, transparent);
+  pointer-events: none;
+}
+.cmp-tag--l { left: 10px; color: var(--isro); }
+.cmp-tag--r { right: 10px; color: var(--nasa); }
+
+/* ── provenance ──────────────────────────────────────────────────────── */
+.prov { margin-top: 20px; }
+.prov summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.prov summary:hover { color: var(--signal); }
+.prov pre {
+  margin-top: 10px; padding: 14px; border: 1px solid var(--rule); border-radius: 3px;
+  background: var(--panel-2); color: var(--muted); font-size: 11.5px;
+  overflow-x: auto; line-height: 1.7;
+}
+
+/* ── tie-point overlay ───────────────────────────────────────────────── */
+.tp { margin-top: 18px; }
+.tp-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; flex-wrap: wrap; }
+.tp-legend { display: flex; align-items: center; gap: 14px; font-size: 11.5px; }
+.tp-key { display: inline-flex; align-items: center; gap: 6px; }
+/* The legend marks mirror the canvas: kept is a solid disc, rejected a ring. */
+.tp-key::before { content: ""; width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.tp-key--in { color: var(--good); }
+.tp-key--in::before { background: var(--good); }
+.tp-key--out { color: var(--bad); }
+.tp-key--out::before { border: 1.5px solid var(--bad); }
+.tp-total { color: var(--muted); }
+.tp-filters { margin-left: auto; display: flex; gap: 6px; }
+.tp-frame {
+  position: relative; display: grid; border: 1px solid var(--rule);
+  border-radius: 3px; background: var(--panel-2); overflow: hidden;
+}
+/* The correspondences are dimmer over the imagery than over a flat panel, but
+   seeing WHERE they cluster -- on ejecta, not on smooth mare -- is the whole
+   point of plotting them spatially. */
+/* opacity below 1 creates a stacking context, which paints this image above the
+   canvas and swallows its pointer events -- hence the explicit z-index and
+   pointer-events:none rather than relying on DOM order. */
+.tp-base {
+  grid-area: 1 / 1; width: 100%; height: auto; display: block;
+  opacity: .55; z-index: 0; pointer-events: none;
+}
+.tp-canvas {
+  grid-area: 1 / 1; display: block; width: 100%; height: auto;
+  cursor: crosshair; z-index: 1;
+}
+.tp-readout {
+  position: absolute; left: 10px; bottom: 10px;
+  padding: 4px 10px; border-radius: 100px; font-size: 11px;
+  background: color-mix(in srgb, var(--void) 78%, transparent); color: var(--signal);
+  min-height: 20px; pointer-events: none;
+}
+
+/* Two square views of the same ground, side by side where there is room. */
+.stage-media { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; align-items: start; }
+.stage-media > div { min-width: 0; }
+.stage-media .tp { margin-top: 0; }
+
+/* ── evidence charts ─────────────────────────────────────────────────── */
+#charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 24px; margin-top: 22px; }
+.chart { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.chart svg { display: block; overflow: visible; }
+.empty { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+
+.chart-legend { display: flex; gap: 14px; font-size: 11px; color: var(--muted); }
+.lg { display: inline-flex; align-items: center; gap: 6px; }
+.lg-mark { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.lg-mark--disc { background: var(--c); }
+.lg-mark--ring { border: 1.5px solid var(--c); }
+
+/* Part-to-whole of one population, not a funnel: there is no sequence here. */
+.prop-track { height: 12px; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 2px; overflow: hidden; }
+.prop-kept { display: block; height: 100%; background: var(--good); }
+.prop-labels { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; }
+.prop-kept-label { color: var(--good); }
+.prop-total-label { color: var(--muted); }
+
+.chart-grid { display: grid; grid-template-columns: repeat(var(--cells, 8), 1fr); gap: 3px; max-width: 240px; }
+.grid-cell { aspect-ratio: 1; border-radius: 1px; background: var(--panel-2); border: 1px solid var(--rule); }
+.grid-cell[data-on] { background: var(--good); border-color: var(--good); }
+
+/* ── diagnosis and readouts ──────────────────────────────────────────── */
+.diag {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+  padding: 11px 14px; margin-bottom: 8px;
+  border: 1px solid var(--rule); border-left-width: 3px; border-radius: 3px;
+  background: var(--panel-2);
+}
+.diag--good { border-left-color: var(--good); }
+.diag--good b { color: var(--good); }
+.diag--warn { border-left-color: var(--warn); }
+.diag--warn b { color: var(--warn); }
+.diag--info { border-left-color: var(--nasa); }
+.diag--info b { color: var(--nasa); }
+.diag b { font-size: 13px; }
+.diag-detail { font-size: 11.5px; color: var(--muted); }
+.diag-note {
+  font-size: 12.5px; color: var(--muted); line-height: 1.65;
+  margin: 0 0 14px 2px; max-width: 76ch;
+}
+.diag-note b { color: var(--signal); font-weight: 600; }
+
+.readouts {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 18px; margin: 20px 0 4px;
+}
+.readouts > div { display: flex; flex-direction: column; gap: 6px; }
+.readouts .readout { color: var(--good); }
+
+/* ── chart explanations and acquisition context ──────────────────────── */
+.chart-explain { font-size: 11.5px; color: var(--muted); line-height: 1.6; max-width: 46ch; }
+
+.ctx { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--rule); }
+.ctx-title { margin-bottom: 14px; }
+.ctx-row {
+  display: grid; grid-template-columns: 130px 92px 1fr; gap: 14px;
+  align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--rule);
+}
+.ctx-row:last-child { border-bottom: 0; }
+.ctx-row b { font-size: 15px; color: var(--signal); }
+.ctx-note { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.ctx-map { margin-top: 22px; max-width: 560px; }
+.ctx-map img { width: 100%; height: auto; border: 1px solid var(--rule); border-radius: 3px; }
+@media (max-width: 700px) {
+  .ctx-row { grid-template-columns: 1fr; gap: 4px; }
+}
+
+/* ── fitted transform ────────────────────────────────────────────────── */
+.chart-transform { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--rule); }
+.tf-grid { max-width: 260px; overflow: hidden; background: var(--panel-2); border: 1px solid var(--rule); border-radius: 3px; padding: 8px; }
+.tf-table { margin-top: 16px; display: flex; flex-direction: column; }
+.tf-row {
+  display: grid; grid-template-columns: 108px 96px 1fr; gap: 14px;
+  align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--rule);
+}
+.tf-row:last-child { border-bottom: 0; }
+.tf-row dt { font-size: 11.5px; color: var(--muted); }
+.tf-row dd { font-size: 13px; color: var(--signal); margin: 0; }
+.tf-row .tf-note { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+/* Out-of-range values are flagged, not hidden: a low error with a bent frame
+   is exactly the silent failure this tool exists to expose. */
+.tf-row--warn dd:not(.tf-note) { color: var(--warn); }
+.tf-row--warn dt::after { content: " !"; color: var(--warn); }
+@media (max-width: 700px) { .tf-row { grid-template-columns: 1fr; gap: 4px; } }
+
+/* ── compositor ──────────────────────────────────────────────────────── */
+.cmp-canvas { grid-area: 1 / 1; display: block; width: 100%; height: auto; }
+.cmp[data-mode="triptych"] { cursor: default; }
+.cmp[data-mode="swipe"] .cmp-handle { display: block; }
+.cmp:not([data-mode="swipe"]) .cmp-handle { display: none; }
+.cmp:not([data-mode="swipe"]) { cursor: default; }
+/* The tags name the two sources, so they only make sense where both halves of
+   the frame belong to one image each. */
+.cmp:not([data-mode="swipe"]) .cmp-tag { display: none; }
+.cmp-loading {
+  grid-area: 1 / 1; align-self: center; justify-self: center;
+  font-size: 12px; color: var(--muted);
+}
+.cmp-controls { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.cmp-ctl { display: flex; align-items: center; gap: 10px; }
+/* An author display rule beats the UA [hidden] rule, so hiding this control
+   from JS silently did nothing and the tile slider showed in every mode. */
+.cmp-ctl[hidden] { display: none; }
+.cmp-ctl input[type="range"] { flex: 1; max-width: 200px; accent-color: var(--nasa); }
+.cmp-hint { font-size: 11.5px; color: var(--muted); line-height: 1.55; max-width: 60ch; }
+
+/* A recorded run announces itself before any number it produced. */
+.diag--replay { border-left-color: var(--warn); }
+.diag--replay b { color: var(--warn); }
+
+/* Shown only by the static public build, where there is no backend to run a
+   live coordinate against and the answer is a command rather than a form. */
+.account-cmd {
+  margin: 10px 0 14px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--panel-2);
+  font: 500 12px/1.6 var(--mono);
+  color: var(--signal);
+  white-space: pre;
+}
+
+/* ── Geographic footprint map ────────────────────────────────────────────────
+   Mission identity follows the console's existing assignment: ISRO orange for
+   Chandrayaan-2, NASA blue for LROC. Fill alpha separates the two footprints,
+   and stroke style carries the same distinction a second time (solid patch,
+   dashed reference strip) so the pair survives colour-vision deficiency and
+   greyscale print. Measured against the panel surface: deuteranope ΔE 24.2,
+   normal-vision ΔE 26.6, contrast above 3:1 on all three. */
+.fp { margin: 0; }
+.fp-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  align-items: flex-start;
+  margin-top: 10px;
+}
+.fp-map { flex: 0 0 auto; }
+.fp-svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.fp-side { flex: 1 1 260px; min-width: 240px; }
+
+.fp-plot { fill: var(--void); stroke: var(--rule); stroke-width: 1; }
+.fp-grid { stroke: var(--rule); stroke-width: 1; opacity: 0.55; }
+.fp-tick { fill: var(--muted); font: 500 10px var(--mono); }
+.fp-tick--y { text-anchor: end; }
+.fp-tick--x { text-anchor: middle; }
+
+.fp-lroc  { fill: var(--nasa); fill-opacity: 0.13; stroke: var(--nasa);
+            stroke-width: 1.6; stroke-dasharray: 5 3; }
+.fp-inter { fill: url(#fp-hatch); stroke: var(--good); stroke-width: 1.2; }
+.fp-hatch-line { stroke: var(--good); stroke-width: 2.2; opacity: 0.55; }
+.fp-ch2   { fill: var(--isro); fill-opacity: 0.30; stroke: var(--isro);
+            stroke-width: 1.8; }
+.fp-target { fill: var(--warn); stroke: var(--void); stroke-width: 0.9; }
+.fp-leader { stroke: var(--isro); stroke-width: 1; opacity: 0.75; }
+.fp-label  { fill: var(--signal); font: 600 10px var(--body); }
+
+.fp-key { list-style: none; margin: 0 0 14px; padding: 0; }
+.fp-key li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--signal);
+}
+.fp-key em { color: var(--muted); font-style: normal; font-family: var(--mono); font-size: 11px; }
+.fp-sw { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 2px; align-self: center; }
+.fp-sw--lroc   { background: color-mix(in srgb, var(--nasa) 20%, transparent);
+                 border: 1.5px dashed var(--nasa); }
+.fp-sw--ch2    { background: color-mix(in srgb, var(--isro) 34%, transparent);
+                 border: 1.5px solid var(--isro); }
+.fp-sw--inter  { border: 1px solid var(--good);
+                 background: repeating-linear-gradient(45deg,
+                   color-mix(in srgb, var(--good) 55%, transparent) 0 2px,
+                   transparent 2px 4px); }
+.fp-sw--target { background: var(--warn); clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); border-radius: 0; }
+
+.fp-stats { display: grid; gap: 8px; margin: 0; padding-top: 12px; border-top: 1px solid var(--rule); }
+.fp-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.fp-stats dt { font-size: 12px; color: var(--muted); }
+.fp-stats dd { margin: 0; font-size: 15px; font-weight: 600; color: var(--signal); }
+.fp-stats dd.is-good { color: var(--good); }
+.fp-stats dd.is-warn { color: var(--warn); }
+
+@media (max-width: 720px) {
+  .fp-body { gap: 16px; }
+  .fp-side { min-width: 0; }
+}
+/* The verdict sentence sits under the whole figure, so it is allowed to run
+   wider than the default explanation column. */
+.fp-note { max-width: 74ch; margin-top: 12px; }
+.fp-note b { color: var(--signal); font-weight: 600; }
